@@ -9,6 +9,7 @@ from typing import List, Dict
 from database.chroma_db import ChromaDBStorage
 from process.resume_process import ResumePreprocessor
 from process.jd_process import JDPreprocessor
+from match.resume_jd_matcher import ResumeJDMatcher
 
 class ResumeManagerApp:
     def __init__(self):
@@ -18,6 +19,8 @@ class ResumeManagerApp:
             st.session_state.processor = ResumePreprocessor()
         if 'jd_processor' not in st.session_state:
             st.session_state.jd_processor = JDPreprocessor()
+        if 'matcher' not in st.session_state:
+            st.session_state.matcher = ResumeJDMatcher()
     
     def run(self):
         st.set_page_config(
@@ -33,7 +36,7 @@ class ResumeManagerApp:
         st.sidebar.title("Navigation")
         page = st.sidebar.selectbox(
             "Choose a page",
-            ["Dashboard", "Upload Resume", "Upload Job Description", "Search & Filter", "View Details"]
+            ["Dashboard", "Upload Resume", "Upload Job Description", "Match Resumes", "Search & Filter", "View Details"]
         )
         
         if page == "Dashboard":
@@ -42,6 +45,8 @@ class ResumeManagerApp:
             self.show_upload_page()
         elif page == "Upload Job Description":
             self.show_upload_jd_page()
+        elif page == "Match Resumes":
+            self.show_matching_page()
         elif page == "Search & Filter":
             self.show_search_page()
         elif page == "View Details":
@@ -350,6 +355,443 @@ class ResumeManagerApp:
 
             except Exception as e:
                 st.error(f"❌ Error saving job description: {str(e)}")
+
+    def show_matching_page(self):
+        st.header("🎯 Match Resumes with Job Description")
+
+        # Get all documents
+        all_resumes = st.session_state.db.list_all_documents("resume")
+        all_jds = st.session_state.db.list_all_documents("job_description")
+
+        if not all_jds:
+            st.warning("⚠️ No job descriptions available. Please upload a job description first.")
+            return
+
+        if not all_resumes:
+            st.warning("⚠️ No resumes available. Please upload resumes first.")
+            return
+
+        # Matching Mode Selection
+        st.subheader("1️⃣ Select Matching Mode")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("### ⚡ Rough Mode")
+            st.markdown("**Fast screening**")
+            st.markdown("✓ Seconds to complete")
+            st.markdown("✓ Vector similarity")
+            st.markdown("✓ All resumes ranked")
+            st.markdown("✓ Good for overview")
+
+        with col2:
+            st.markdown("### 🚀 Hybrid Mode")
+            st.markdown("**Smart filtering**")
+            st.markdown("✓ Best of both worlds")
+            st.markdown("✓ Fast rough filter first")
+            st.markdown("✓ Deep analysis on top N")
+            st.markdown("✓ **Recommended**")
+
+        with col3:
+            st.markdown("### 🎯 Precise Mode")
+            st.markdown("**Deep analysis**")
+            st.markdown("✓ Detailed evaluation")
+            st.markdown("✓ AI insights")
+            st.markdown("✓ Strengths/weaknesses")
+            st.markdown("✓ Slower, thorough")
+
+        matching_mode = st.radio(
+            "Choose matching mode:",
+            ["⚡ Rough Mode (Fast)", "🚀 Hybrid Mode (Recommended)", "🎯 Precise Mode (Detailed)"],
+            index=1,  # Default to Hybrid
+            horizontal=True
+        )
+
+        is_rough_mode = matching_mode.startswith("⚡")
+        is_hybrid_mode = matching_mode.startswith("🚀")
+        is_precise_mode = matching_mode.startswith("🎯")
+
+        # Job Description Selection
+        st.markdown("---")
+        st.subheader("2️⃣ Select Job Description")
+        jd_options = [jd['id'] for jd in all_jds]
+        selected_jd = st.selectbox("Choose a job description:", jd_options)
+
+        # Configuration based on mode
+        st.markdown("---")
+        if is_rough_mode:
+            st.subheader("3️⃣ Configure Search")
+            top_k = st.slider(
+                "Number of top chunks to retrieve:",
+                min_value=10,
+                max_value=200,
+                value=50,
+                step=10,
+                help="More chunks = more comprehensive but may include less relevant matches"
+            )
+            selected_resumes = None
+            precise_top_n = None
+            st.info(f"ℹ️ Rough mode will automatically search across all {len(all_resumes)} resumes")
+
+        elif is_hybrid_mode:
+            st.subheader("3️⃣ Configure Hybrid Matching")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                rough_top_k = st.slider(
+                    "Rough filter: Top chunks to search",
+                    min_value=20,
+                    max_value=200,
+                    value=50,
+                    step=10,
+                    help="More chunks = more resumes in initial filter"
+                )
+
+            with col2:
+                precise_top_n = st.slider(
+                    "Precise analysis: Top N resumes",
+                    min_value=3,
+                    max_value=20,
+                    value=10,
+                    step=1,
+                    help="Number of top rough matches to analyze in detail"
+                )
+
+            top_k = rough_top_k
+            selected_resumes = None
+            st.info(f"ℹ️ Will filter all {len(all_resumes)} resumes with rough matching, then analyze top {precise_top_n} with AI")
+
+        else:  # Precise mode
+            st.subheader("3️⃣ Select Resumes to Match")
+
+            # Option to select all or specific resumes
+            select_all = st.checkbox("Select all resumes", value=True)
+
+            if select_all:
+                selected_resumes = [resume['id'] for resume in all_resumes]
+                st.info(f"✅ Selected {len(selected_resumes)} resumes")
+            else:
+                resume_options = [resume['id'] for resume in all_resumes]
+                selected_resumes = st.multiselect(
+                    "Choose resumes to match:",
+                    resume_options,
+                    default=[]
+                )
+            top_k = None
+            precise_top_n = None
+
+        # Match Button
+        st.markdown("---")
+        st.subheader("4️⃣ Run Matching")
+
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            match_button = st.button("🚀 Run Matching Analysis", type="primary", use_container_width=True)
+
+        if match_button:
+            if is_precise_mode and not selected_resumes:
+                st.error("❌ Please select at least one resume to match!")
+                return
+
+            try:
+                # Get JD document and chunks (needed for all modes)
+                jd_doc = st.session_state.db.get_document(selected_jd)
+                if not jd_doc:
+                    st.error("❌ Job description not found!")
+                    return
+
+                jd_text = jd_doc.get('raw_text', '')
+                jd_chunks = st.session_state.db.get_chunks_by_document(selected_jd)
+
+                if is_rough_mode:
+                    # Rough Mode: Use semantic search only
+                    with st.spinner(f"⚡ Running rough matching across all resumes..."):
+                        if not jd_text:
+                            st.error("❌ Job description has no text!")
+                            return
+
+                        results = st.session_state.matcher.rough_match_resumes(
+                            db_storage=st.session_state.db,
+                            jd_text=jd_text,
+                            top_k=top_k
+                        )
+
+                        st.session_state.match_results = results
+                        st.session_state.matching_mode = 'rough'
+
+                elif is_hybrid_mode:
+                    # Hybrid Mode: Rough filter + Precise analysis on top N
+                    with st.spinner(f"🚀 Running hybrid matching (filter all, analyze top {precise_top_n})..."):
+                        if not jd_text:
+                            st.error("❌ Job description has no text!")
+                            return
+
+                        if not jd_chunks:
+                            st.error("❌ No chunks found for selected job description!")
+                            return
+
+                        results = st.session_state.matcher.hybrid_match_resumes(
+                            db_storage=st.session_state.db,
+                            jd_text=jd_text,
+                            jd_chunks=jd_chunks,
+                            rough_top_k=top_k,
+                            precise_top_n=precise_top_n
+                        )
+
+                        st.session_state.match_results = results
+                        st.session_state.matching_mode = 'hybrid'
+
+                else:
+                    # Precise Mode: LLM analysis on all selected
+                    with st.spinner(f"🎯 Running precise matching for {len(selected_resumes)} resumes..."):
+                        if not jd_chunks:
+                            st.error("❌ No chunks found for selected job description!")
+                            return
+
+                        # Prepare resume chunks list
+                        resume_chunks_list = []
+                        for resume_id in selected_resumes:
+                            resume_chunks = st.session_state.db.get_chunks_by_document(resume_id)
+                            if resume_chunks:
+                                resume_chunks_list.append((resume_id, resume_chunks))
+
+                        results = st.session_state.matcher.batch_match_resumes(
+                            resume_chunks_list,
+                            jd_chunks
+                        )
+
+                        st.session_state.match_results = results
+                        st.session_state.matching_mode = 'precise'
+
+            except Exception as e:
+                st.error(f"❌ Matching error: {str(e)}")
+                import traceback
+                st.error(traceback.format_exc())
+                return
+
+        # Display Results
+        if 'match_results' in st.session_state and st.session_state.match_results:
+            st.markdown("---")
+
+            results = st.session_state.match_results
+            display_mode = st.session_state.get('matching_mode', 'precise')
+
+            # Display mode indicator
+            if display_mode == 'rough':
+                st.header("⚡ Rough Matching Results")
+                st.info("💡 Results based on semantic similarity search. For detailed analysis, use Hybrid or Precise Mode.")
+            elif display_mode == 'hybrid':
+                st.header("🚀 Hybrid Matching Results")
+                st.success("💡 Top candidates filtered by rough matching, then analyzed in detail by AI.")
+                # Show breakdown
+                precise_count = sum(1 for r in results if r.get('matching_mode') == 'hybrid')
+                rough_only_count = sum(1 for r in results if r.get('matching_mode') == 'hybrid_rough_only')
+                st.write(f"📊 **{precise_count}** resumes with AI analysis | **{rough_only_count}** filtered by rough matching only")
+            else:
+                st.header("🎯 Precise Matching Results")
+                st.info("💡 Results based on AI-powered detailed analysis.")
+
+            # Summary Statistics
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                qualified_count = sum(1 for r in results if r.get('qualified', False))
+                st.metric("✅ Qualified", qualified_count)
+
+            with col2:
+                avg_score = sum(r.get('match_score', 0) for r in results) / len(results)
+                st.metric("📈 Avg Score", f"{avg_score:.1f}")
+
+            with col3:
+                strong_matches = sum(1 for r in results if r.get('recommendation') == 'STRONG_MATCH')
+                st.metric("⭐ Strong Matches", strong_matches)
+
+            with col4:
+                st.metric("📄 Total Analyzed", len(results))
+
+            st.markdown("---")
+
+            # Individual Results
+            for idx, result in enumerate(results, 1):
+                resume_id = result.get('resume_id', 'Unknown')
+                qualified = result.get('qualified', False)
+                match_score = result.get('match_score', 0)
+                recommendation = result.get('recommendation', 'N/A')
+                summary = result.get('summary', 'No summary available')
+
+                # Color coding based on qualification
+                if qualified:
+                    status_emoji = "✅"
+                    status_color = "green"
+                else:
+                    status_emoji = "❌"
+                    status_color = "red"
+
+                # Recommendation badge
+                rec_colors = {
+                    'STRONG_MATCH': '🟢',
+                    'GOOD_MATCH': '🟡',
+                    'PARTIAL_MATCH': '🟠',
+                    'NOT_MATCH': '🔴'
+                }
+                rec_emoji = rec_colors.get(recommendation, '⚪')
+
+                with st.expander(
+                    f"{status_emoji} #{idx} - {resume_id} | Score: {match_score}/100 {rec_emoji} {recommendation}",
+                    expanded=(idx <= 3)  # Expand top 3 results by default
+                ):
+                    # Summary
+                    st.markdown(f"**Summary:** {summary}")
+                    st.markdown("---")
+
+                    # Display based on mode and result type
+                    result_mode = result.get('matching_mode', display_mode)
+
+                    if result_mode in ['rough', 'hybrid_rough_only']:
+                        # Rough mode or hybrid rough-only: Show matching statistics and chunks
+                        if result_mode == 'hybrid_rough_only':
+                            st.warning("⚠️ " + result.get('note', 'Filtered out in rough matching'))
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            st.metric("Matching Chunks", result.get('matching_chunks_count', 0))
+
+                        with col2:
+                            st.metric("Avg Similarity", f"{result.get('average_similarity', 0):.2f}")
+
+                        with col3:
+                            st.metric("Total Similarity", f"{result.get('total_similarity', 0):.2f}")
+
+                        # Show top matching chunks
+                        st.markdown("---")
+                        st.markdown("### 🔍 Top Matching Chunks")
+
+                        top_chunks = result.get('top_matching_chunks', [])
+                        if top_chunks:
+                            for i, chunk in enumerate(top_chunks, 1):
+                                with st.expander(f"Chunk #{i} - {chunk.get('field', 'unknown')} (Similarity: {chunk.get('similarity', 0):.2f})"):
+                                    st.write(f"**Chunk ID:** {chunk.get('chunk_id')}")
+                                    st.write(f"**Field:** {chunk.get('field')}")
+                                    st.write(f"**Content Preview:**")
+                                    st.write(chunk.get('content', 'N/A'))
+                        else:
+                            st.info("No chunk details available")
+
+                    else:
+                        # Precise or hybrid mode: Show detailed analysis
+                        if result_mode == 'hybrid':
+                            # Show rough matching info for hybrid
+                            st.info(f"🔍 Rough Filter Results: Score {result.get('rough_match_score', 0):.1f} | "
+                                   f"Similarity {result.get('rough_similarity', 0):.2f} | "
+                                   f"{result.get('rough_matching_chunks', 0)} chunks")
+                            st.markdown("---")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.markdown("### 💪 Strengths")
+                            strengths = result.get('strengths', [])
+                            if strengths:
+                                for strength in strengths:
+                                    st.markdown(f"• {strength}")
+                            else:
+                                st.info("No strengths listed")
+
+                        with col2:
+                            st.markdown("### ⚠️ Weaknesses")
+                            weaknesses = result.get('weaknesses', [])
+                            if weaknesses:
+                                for weakness in weaknesses:
+                                    st.markdown(f"• {weakness}")
+                            else:
+                                st.info("No weaknesses listed")
+
+                        # Detailed Analysis
+                        st.markdown("---")
+                        st.markdown("### 📊 Detailed Analysis")
+
+                        detailed = result.get('detailed_analysis', {})
+
+                        if detailed:
+                            col1, col2, col3, col4 = st.columns(4)
+
+                            with col1:
+                                skills = detailed.get('skills_match', {})
+                                st.metric("Skills", f"{skills.get('score', 0)}/100")
+                                with st.expander("Details"):
+                                    st.write(skills.get('details', 'N/A'))
+
+                            with col2:
+                                experience = detailed.get('experience_match', {})
+                                st.metric("Experience", f"{experience.get('score', 0)}/100")
+                                with st.expander("Details"):
+                                    st.write(experience.get('details', 'N/A'))
+
+                            with col3:
+                                education = detailed.get('education_match', {})
+                                st.metric("Education", f"{education.get('score', 0)}/100")
+                                with st.expander("Details"):
+                                    st.write(education.get('details', 'N/A'))
+
+                        with col4:
+                            cultural = detailed.get('cultural_fit', {})
+                            st.metric("Cultural Fit", f"{cultural.get('score', 0)}/100")
+                            with st.expander("Details"):
+                                st.write(cultural.get('details', 'N/A'))
+
+                    # Next Steps
+                    st.markdown("---")
+                    st.markdown("### 🎯 Recommendation")
+                    next_steps = result.get('next_steps', 'No recommendation provided')
+                    st.info(next_steps)
+
+                    # Debug info (optional)
+                    if result.get('error'):
+                        st.error(f"**Error:** {result['error']}")
+
+            # Export Results
+            st.markdown("---")
+            st.subheader("💾 Export Results")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Export as JSON
+                json_str = json.dumps(results, indent=2)
+                st.download_button(
+                    label="📥 Download as JSON",
+                    data=json_str,
+                    file_name=f"match_results_{selected_jd}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+
+            with col2:
+                # Export as CSV
+                import io
+                csv_data = []
+                for r in results:
+                    csv_data.append({
+                        'Resume ID': r.get('resume_id'),
+                        'Qualified': r.get('qualified'),
+                        'Match Score': r.get('match_score'),
+                        'Recommendation': r.get('recommendation'),
+                        'Summary': r.get('summary')
+                    })
+
+                df = pd.DataFrame(csv_data)
+                csv_buffer = io.StringIO()
+                df.to_csv(csv_buffer, index=False)
+
+                st.download_button(
+                    label="📥 Download as CSV",
+                    data=csv_buffer.getvalue(),
+                    file_name=f"match_results_{selected_jd}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
     def show_search_page(self):
         st.header("🔍 Search & Filter Resumes")

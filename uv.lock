@@ -2071,6 +2071,7 @@ dependencies = [
     { name = "chromadb" },
     { name = "google-generativeai" },
     { name = "psycopg2-binary" },
+    { name = "python-dotenv" },
     { name = "sentence-transformers" },
     { name = "streamlit" },
 ]
@@ -2080,6 +2081,7 @@ requires-dist = [
     { name = "chromadb", specifier = ">=1.2.1" },
     { name = "google-generativeai", specifier = ">=0.8.5" },
     { name = "psycopg2-binary", specifier = ">=2.9.11" },
+    { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "sentence-transformers", specifier = ">=5.1.2" },
     { name = "streamlit", specifier = ">=1.50.0" },
 ]
