@@ -1,0 +1,63 @@
+
+def generate_resume_extraction_prompt(resume_text: str) -> str:
+    resume_prompt = f"""You are a precise resume parser. Extract information from the resume and output ONLY valid JSON following this exact schema:
+
+{{
+  "experience": [
+    {{
+      "company": "Company Name",
+      "title": "Job Title",
+      "description": [
+        "First responsibility or achievement",
+        "Second responsibility or achievement",
+        "Additional bullet points..."
+      ]
+    }}
+  ],
+  "skills": ["Skill1", "Skill2", "Skill3"],
+  "education": [
+    {{
+      "school": "University Name",
+      "degree": "Degree Type and Major"
+    }}
+  ]
+}}
+
+EXTRACTION RULES:
+
+1. EXPERIENCE:
+   - Extract each job/position as a separate object
+   - "company": The organization/company name (string)
+   - "title": The job title/role (string)
+   - "description": Array of strings, each representing one responsibility, achievement, or task
+   - Break down paragraphs into clear, individual bullet points
+   - Keep each description point concise (1-2 sentences max)
+   - Preserve quantifiable metrics and achievements
+   - If no experience found, use empty array []
+
+2. SKILLS:
+   - Extract as an array of individual skill strings
+   - Include technical skills, programming languages, frameworks, tools, and technologies
+   - Each skill should be a separate string in the array
+   - Remove duplicates
+   - If no skills found, use empty array []
+
+3. EDUCATION:
+   - Extract each degree/program as a separate object
+   - "school": The institution/university name (string)
+   - "degree": The full degree name and major/field of study (string)
+   - Example: "BSc Computer Science", "Master of Business Administration", "PhD in Physics"
+   - If no education found, use empty array []
+
+IMPORTANT:
+- Return ONLY the JSON object, no markdown code blocks, no explanations, no additional text
+- Ensure all JSON is properly formatted and valid
+- Use double quotes for all strings
+- Escape special characters properly
+- If a section is missing from the resume, use an empty array [] for that field
+- Never omit the top-level fields (experience, skills, education)
+
+Resume Text:
+{resume_text}
+"""
+    return resume_prompt

@@ -1,0 +1,205 @@
+"""
+Resume-JD Matching Logic
+Merges resume chunks and compares with JD to determine qualification
+"""
+
+import json
+import re
+from typing import Dict, List, Any
+import sys
+import os
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+
+from prompt.match_resume_jd import generate_match_prompt
+import google.generativeai as genai
+
+
+class ResumeJDMatcher:
+    """Matches resumes with job descriptions and provides qualification analysis"""
+
+    def __init__(self, api_key="AIzaSyDMeVeMSCuAPI2YZV9K1bVo8faadFPT9HQ"):
+        """
+        Initialize the matcher with LLM client
+
+        Args:
+            api_key: Google API key for Gemini
+        """
+        genai.configure(api_key=api_key)
+        self.llm_client = genai.GenerativeModel("gemini-2.0-flash-exp")
+
+    def merge_resume_chunks(self, chunks: List[Dict[str, Any]]) -> str:
+        """
+        Merge all chunks of a resume into a single text
+
+        Args:
+            chunks: List of chunk dictionaries with 'field' and 'content'
+
+        Returns:
+            Merged resume content as a single string
+        """
+        if not chunks:
+            return ""
+
+        # Group chunks by field
+        field_groups = {}
+        for chunk in chunks:
+            field = chunk.get('metadata', {}).get('field', 'unknown')
+            content = chunk.get('content', '')
+
+            if field not in field_groups:
+                field_groups[field] = []
+            field_groups[field].append(content)
+
+        # Merge chunks with field headers
+        merged_sections = []
+
+        # Define field order for better readability
+        field_order = [
+            'summary',
+            'experience',
+            'skills',
+            'education',
+            'certifications',
+            'projects',
+            'achievements'
+        ]
+
+        # Add fields in preferred order
+        for field in field_order:
+            if field in field_groups:
+                section_content = '\n'.join(field_groups[field])
+                merged_sections.append(f"## {field.upper()}\n{section_content}")
+
+        # Add any remaining fields not in the order
+        for field, contents in field_groups.items():
+            if field not in field_order:
+                section_content = '\n'.join(contents)
+                merged_sections.append(f"## {field.upper()}\n{section_content}")
+
+        return '\n\n'.join(merged_sections)
+
+    def merge_jd_chunks(self, chunks: List[Dict[str, Any]]) -> str:
+        """
+        Merge all chunks of a job description into a single text
+
+        Args:
+            chunks: List of JD chunk dictionaries
+
+        Returns:
+            Merged JD content as a single string
+        """
+        if not chunks:
+            return ""
+
+        # Group chunks by field
+        field_groups = {}
+        for chunk in chunks:
+            field = chunk.get('metadata', {}).get('field', 'unknown')
+            content = chunk.get('content', '')
+
+            if field not in field_groups:
+                field_groups[field] = []
+            field_groups[field].append(content)
+
+        # Merge chunks with field headers
+        merged_sections = []
+        for field, contents in field_groups.items():
+            section_content = '\n'.join(contents)
+            merged_sections.append(f"## {field.upper()}\n{section_content}")
+
+        return '\n\n'.join(merged_sections)
+
+    def match_resume_with_jd(
+        self,
+        resume_chunks: List[Dict[str, Any]],
+        jd_chunks: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Match a resume with a job description and get qualification result
+
+        Args:
+            resume_chunks: List of resume chunk dictionaries
+            jd_chunks: List of JD chunk dictionaries
+
+        Returns:
+            Dictionary containing match results with qualification decision
+        """
+        try:
+            # Merge chunks
+            resume_content = self.merge_resume_chunks(resume_chunks)
+            jd_content = self.merge_jd_chunks(jd_chunks)
+
+            if not resume_content or not jd_content:
+                return {
+                    "qualified": False,
+                    "match_score": 0,
+                    "summary": "Missing resume or job description content",
+                    "error": "Insufficient data for matching"
+                }
+
+            # Generate prompt
+            prompt = generate_match_prompt(resume_content, jd_content)
+
+            # Call LLM
+            response = self.llm_client.generate_content(prompt)
+            response_text = response.text.strip()
+
+            # Parse JSON response
+            try:
+                # Try to extract JSON if wrapped in markdown
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                else:
+                    result = json.loads(response_text)
+
+                return result
+
+            except json.JSONDecodeError as e:
+                print(f"[Warning] Failed to parse LLM response as JSON: {e}")
+                print(f"Raw response: {response_text[:500]}")
+                return {
+                    "qualified": False,
+                    "match_score": 0,
+                    "summary": "Error parsing match results",
+                    "error": f"JSON parsing failed: {str(e)}",
+                    "raw_response": response_text
+                }
+
+        except Exception as e:
+            print(f"[Error] Matching failed: {e}")
+            return {
+                "qualified": False,
+                "match_score": 0,
+                "summary": "Error during matching process",
+                "error": str(e)
+            }
+
+    def batch_match_resumes(
+        self,
+        resume_chunks_list: List[tuple],
+        jd_chunks: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Match multiple resumes with a single job description
+
+        Args:
+            resume_chunks_list: List of tuples (resume_id, resume_chunks)
+            jd_chunks: List of JD chunk dictionaries
+
+        Returns:
+            List of match results for each resume
+        """
+        results = []
+
+        for resume_id, resume_chunks in resume_chunks_list:
+            match_result = self.match_resume_with_jd(resume_chunks, jd_chunks)
+            match_result['resume_id'] = resume_id
+            results.append(match_result)
+
+        # Sort by match_score descending
+        results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+
+        return results

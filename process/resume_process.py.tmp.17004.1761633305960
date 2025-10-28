@@ -88,8 +88,7 @@ class ResumePreprocessor:
         for i, edu in enumerate(resume_json.get("education", [])):
             degree = edu.get("degree", "")
             school = edu.get("school", "")
-            gpa = edu.get("gpa", "")
-            text = f"Education: {degree} at {school}. GPA: {gpa}"
+            text = f"Education: {degree} at {school}."
             chunks.append({
                 "chunk_id": f"{resume_id}_{i}_education",
                 "field": "education",
@@ -119,12 +118,12 @@ class ResumePreprocessor:
         return chunks
         
     def preprocess_resume(self, resume_text: str, resume_id: str = None) -> List[Dict[str, str]]:
-        try:
-            sections = self.parse_with_llm(resume_text) 
-            print(f"Extracted sections: {sections}")
-            print(f"Using resume ID: {resume_id}")
-            print(sections)
-            return self.generate_resume_chunks(sections, resume_id)
-        except Exception as e:
-            print(f"Error during resume preprocessing: {e}")
-            return []
+        #try:
+        sections = self.parse_with_llm(resume_text) 
+        print(f"Extracted sections: {sections}")
+        print(f"Using resume ID: {resume_id}")
+        print(sections)
+        return self.generate_resume_chunks(sections, resume_id)
+        # except Exception as e:
+        #     print(f"Error during resume preprocessing: {e}")
+        #     return []

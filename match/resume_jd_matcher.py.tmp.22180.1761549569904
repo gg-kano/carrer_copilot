@@ -1,0 +1,306 @@
+"""
+Resume-JD Matching Logic
+Merges resume chunks and compares with JD to determine qualification
+"""
+
+import json
+import re
+from typing import Dict, List, Any
+import sys
+import os
+from dotenv import load_dotenv
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+
+# Load environment variables from .env file
+load_dotenv(os.path.join(parent_dir, '.env'))
+
+from prompt.match_resume_jd import generate_match_prompt
+import google.generativeai as genai
+
+
+class ResumeJDMatcher:
+    """Matches resumes with job descriptions and provides qualification analysis"""
+
+    def __init__(self, api_key=None):
+        """
+        Initialize the matcher with LLM client
+
+        Args:
+            api_key: Google API key for Gemini
+        """
+        if api_key is None:
+            api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("Google API key not found. Please set GOOGLE_API_KEY in .env file")
+        genai.configure(api_key=api_key)
+        self.llm_client = genai.GenerativeModel("gemini-2.0-flash-exp")
+
+    def merge_resume_chunks(self, chunks: List[Dict[str, Any]]) -> str:
+        """
+        Merge all chunks of a resume into a single text
+
+        Args:
+            chunks: List of chunk dictionaries with 'field' and 'content'
+
+        Returns:
+            Merged resume content as a single string
+        """
+        if not chunks:
+            return ""
+
+        # Group chunks by field
+        field_groups = {}
+        for chunk in chunks:
+            field = chunk.get('metadata', {}).get('field', 'unknown')
+            content = chunk.get('content', '')
+
+            if field not in field_groups:
+                field_groups[field] = []
+            field_groups[field].append(content)
+
+        # Merge chunks with field headers
+        merged_sections = []
+
+        # Define field order for better readability
+        field_order = [
+            'summary',
+            'experience',
+            'skills',
+            'education',
+            'certifications',
+            'projects',
+            'achievements'
+        ]
+
+        # Add fields in preferred order
+        for field in field_order:
+            if field in field_groups:
+                section_content = '\n'.join(field_groups[field])
+                merged_sections.append(f"## {field.upper()}\n{section_content}")
+
+        # Add any remaining fields not in the order
+        for field, contents in field_groups.items():
+            if field not in field_order:
+                section_content = '\n'.join(contents)
+                merged_sections.append(f"## {field.upper()}\n{section_content}")
+
+        return '\n\n'.join(merged_sections)
+
+    def merge_jd_chunks(self, chunks: List[Dict[str, Any]]) -> str:
+        """
+        Merge all chunks of a job description into a single text
+
+        Args:
+            chunks: List of JD chunk dictionaries
+
+        Returns:
+            Merged JD content as a single string
+        """
+        if not chunks:
+            return ""
+
+        # Group chunks by field
+        field_groups = {}
+        for chunk in chunks:
+            field = chunk.get('metadata', {}).get('field', 'unknown')
+            content = chunk.get('content', '')
+
+            if field not in field_groups:
+                field_groups[field] = []
+            field_groups[field].append(content)
+
+        # Merge chunks with field headers
+        merged_sections = []
+        for field, contents in field_groups.items():
+            section_content = '\n'.join(contents)
+            merged_sections.append(f"## {field.upper()}\n{section_content}")
+
+        return '\n\n'.join(merged_sections)
+
+    def match_resume_with_jd(
+        self,
+        resume_chunks: List[Dict[str, Any]],
+        jd_chunks: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Match a resume with a job description and get qualification result
+
+        Args:
+            resume_chunks: List of resume chunk dictionaries
+            jd_chunks: List of JD chunk dictionaries
+
+        Returns:
+            Dictionary containing match results with qualification decision
+        """
+        try:
+            # Merge chunks
+            resume_content = self.merge_resume_chunks(resume_chunks)
+            jd_content = self.merge_jd_chunks(jd_chunks)
+
+            if not resume_content or not jd_content:
+                return {
+                    "qualified": False,
+                    "match_score": 0,
+                    "summary": "Missing resume or job description content",
+                    "error": "Insufficient data for matching"
+                }
+
+            # Generate prompt
+            prompt = generate_match_prompt(resume_content, jd_content)
+
+            # Call LLM
+            response = self.llm_client.generate_content(prompt)
+            response_text = response.text.strip()
+
+            # Parse JSON response
+            try:
+                # Try to extract JSON if wrapped in markdown
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                else:
+                    result = json.loads(response_text)
+
+                return result
+
+            except json.JSONDecodeError as e:
+                print(f"[Warning] Failed to parse LLM response as JSON: {e}")
+                print(f"Raw response: {response_text[:500]}")
+                return {
+                    "qualified": False,
+                    "match_score": 0,
+                    "summary": "Error parsing match results",
+                    "error": f"JSON parsing failed: {str(e)}",
+                    "raw_response": response_text
+                }
+
+        except Exception as e:
+            print(f"[Error] Matching failed: {e}")
+            return {
+                "qualified": False,
+                "match_score": 0,
+                "summary": "Error during matching process",
+                "error": str(e)
+            }
+
+    def batch_match_resumes(
+        self,
+        resume_chunks_list: List[tuple],
+        jd_chunks: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Match multiple resumes with a single job description (Precise Mode)
+
+        Args:
+            resume_chunks_list: List of tuples (resume_id, resume_chunks)
+            jd_chunks: List of JD chunk dictionaries
+
+        Returns:
+            List of match results for each resume
+        """
+        results = []
+
+        for resume_id, resume_chunks in resume_chunks_list:
+            match_result = self.match_resume_with_jd(resume_chunks, jd_chunks)
+            match_result['resume_id'] = resume_id
+            results.append(match_result)
+
+        # Sort by match_score descending
+        results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+
+        return results
+
+    def rough_match_resumes(
+        self,
+        db_storage,
+        jd_text: str,
+        top_k: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Rough matching mode: Query JD against all resume chunks and rank by similarity
+
+        Args:
+            db_storage: ChromaDB storage instance
+            jd_text: Job description text to query
+            top_k: Number of top chunks to retrieve
+
+        Returns:
+            List of resume rankings with scores
+        """
+        # Search for similar resume chunks using JD text
+        search_results = db_storage.search_similar_chunks(
+            query_text=jd_text,
+            document_type="resume",
+            top_k=top_k
+        )
+
+        # Aggregate scores by resume_id
+        resume_scores = {}
+        resume_chunk_counts = {}
+        resume_top_chunks = {}
+
+        for result in search_results:
+            resume_id = result['metadata'].get('document_id')
+            similarity = result.get('similarity', 0)
+
+            if resume_id:
+                # Accumulate scores
+                if resume_id not in resume_scores:
+                    resume_scores[resume_id] = 0
+                    resume_chunk_counts[resume_id] = 0
+                    resume_top_chunks[resume_id] = []
+
+                resume_scores[resume_id] += similarity
+                resume_chunk_counts[resume_id] += 1
+
+                # Keep track of top matching chunks for this resume
+                resume_top_chunks[resume_id].append({
+                    'chunk_id': result['chunk_id'],
+                    'field': result['metadata'].get('field', 'unknown'),
+                    'content': result['content'][:200] + '...',  # Preview
+                    'similarity': similarity
+                })
+
+        # Calculate average scores and create results
+        results = []
+        for resume_id, total_score in resume_scores.items():
+            chunk_count = resume_chunk_counts[resume_id]
+            avg_score = total_score / chunk_count if chunk_count > 0 else 0
+
+            # Convert similarity to 0-100 scale
+            # Assuming similarity is in range [-1, 1] or [0, 1]
+            # Adjust this based on your actual similarity metric
+            match_score = max(0, min(100, (avg_score + 1) * 50))  # Convert [-1,1] to [0,100]
+
+            # Determine qualification based on score
+            qualified = match_score >= 60
+
+            # Determine recommendation
+            if match_score >= 80:
+                recommendation = "STRONG_MATCH"
+            elif match_score >= 65:
+                recommendation = "GOOD_MATCH"
+            elif match_score >= 50:
+                recommendation = "PARTIAL_MATCH"
+            else:
+                recommendation = "NOT_MATCH"
+
+            results.append({
+                'resume_id': resume_id,
+                'qualified': qualified,
+                'match_score': round(match_score, 2),
+                'recommendation': recommendation,
+                'summary': f"Found {chunk_count} matching chunks with average similarity {avg_score:.2f}",
+                'matching_chunks_count': chunk_count,
+                'total_similarity': round(total_score, 2),
+                'average_similarity': round(avg_score, 2),
+                'top_matching_chunks': resume_top_chunks[resume_id][:5],  # Top 5 chunks
+                'matching_mode': 'rough'
+            })
+
+        # Sort by match_score descending
+        results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+
+        return results
