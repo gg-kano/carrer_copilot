@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/**)",
+      "Bash(dir:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(cd:*)",
+      "Bash(python verify_cache_setup.py:*)",
+      "Bash(python test_chunk_integration.py:*)",
+      "Bash(python:*)",
+      "Bash(find:*)",
+      "Bash(nul)",
+      "Bash(if exist process__pycache__ rmdir /s /q process__pycache__)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
