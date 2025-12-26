@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 class ChromaDBStorage:
 
-    def __init__(self, persist_directory: str = "./chroma_db"):
+    def __init__(self, persist_directory: str = None):
         """
         Initialize ChromaDB storage with collections
 
@@ -32,6 +32,10 @@ class ChromaDBStorage:
         Raises:
             DatabaseConnectionError: If connection to ChromaDB fails
         """
+        if persist_directory is None:
+            from config import Config
+            persist_directory = Config.CHROMA_DB_PATH
+
         try:
             logger.info(f"Initializing ChromaDB at {persist_directory}")
             self.client = chromadb.PersistentClient(path=persist_directory)
@@ -49,7 +53,8 @@ class ChromaDBStorage:
             logger.debug("Chunks collection initialized")
 
             # Create PDF storage directory
-            self.pdf_storage_dir = "./pdf_storage"
+            from config import Config
+            self.pdf_storage_dir = Config.PDF_STORAGE_DIR
             os.makedirs(self.pdf_storage_dir, exist_ok=True)
             logger.debug(f"PDF storage directory created at {self.pdf_storage_dir}")
 
