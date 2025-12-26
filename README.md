@@ -53,6 +53,8 @@
 
 ## Quick Start
 
+### Option 1: Manual Setup (Recommended for Developers)
+
 Get up and running in 3 minutes:
 
 ```bash
@@ -60,15 +62,35 @@ Get up and running in 3 minutes:
 git clone https://github.com/gg-kano/carrer_copilot.git
 cd carrer_copilot
 
-# Install dependencies (using pip)
+# Install dependencies
 pip install -r requirements.txt
 
 # Set up your API key
-echo "GOOGLE_API_KEY=your_api_key_here" > .env
+cp .env.example .env
+# Edit .env and add your GOOGLE_API_KEY
 
 # Launch the app
 streamlit run app.py
 ```
+
+### Option 2: Automated Setup (For Beginners)
+
+**Optional convenience scripts** - double-click to run:
+
+**Windows:**
+1. Run `setup.bat` to install dependencies
+2. Run `run.bat` to start the application
+
+**Linux/Mac:**
+```bash
+chmod +x setup.sh run.sh
+./setup.sh  # Install dependencies
+./run.sh    # Start the application
+```
+
+> **Note**: These scripts are **optional convenience tools**. You can always use the manual commands above instead.
+
+---
 
 Visit `http://localhost:8501` in your browser and start matching candidates!
 
