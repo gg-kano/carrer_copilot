@@ -1,0 +1,58 @@
+Senior Software Engineer - AI/ML
+
+Company: Tech Innovations Inc.
+Location: Remote / San Francisco, CA
+Type: Full-time
+
+About the Role:
+We are seeking an experienced Senior Software Engineer with expertise in AI/ML to join our cutting-edge development team. You will be responsible for building intelligent systems that leverage the latest in artificial intelligence and machine learning technologies.
+
+Key Responsibilities:
+• Design and implement AI-powered features and applications
+• Build and optimize vector search and retrieval systems
+• Develop scalable backend services using Python
+• Integrate large language models (LLMs) into production systems
+• Collaborate with data scientists and product teams
+• Mentor junior engineers and contribute to technical decisions
+• Write clean, maintainable, and well-documented code
+
+Required Qualifications:
+• 5+ years of professional software development experience
+• Strong proficiency in Python and modern web frameworks
+• Experience with AI/ML technologies and frameworks
+• Knowledge of vector databases (ChromaDB, Pinecone, or similar)
+• Familiarity with LLM frameworks (LangChain, LlamaIndex)
+• Experience with RESTful API design and development
+• Proficiency with Git and collaborative development workflows
+• Bachelor's degree in Computer Science or related field
+
+Preferred Qualifications:
+• Experience with Google Gemini, OpenAI, or Anthropic APIs
+• Knowledge of RAG (Retrieval-Augmented Generation) systems
+• Experience with Streamlit or similar Python web frameworks
+• Understanding of prompt engineering and LLM optimization
+• Docker and Kubernetes experience
+• Cloud platform experience (AWS, GCP, or Azure)
+• Previous work with ChromaDB or other vector databases
+• Open source contributions
+
+Technical Skills:
+• Languages: Python, SQL
+• Frameworks: FastAPI, Flask, Streamlit, LangChain
+• Databases: ChromaDB, PostgreSQL, MongoDB
+• ML/AI: Sentence Transformers, Hugging Face, TensorFlow
+• Tools: Git, Docker, CI/CD pipelines
+• Cloud: AWS/GCP/Azure
+
+What We Offer:
+• Competitive salary ($150k - $200k based on experience)
+• Equity/stock options
+• Comprehensive health, dental, and vision insurance
+• 401(k) with company match
+• Flexible work hours and remote work options
+• Professional development budget
+• Latest tech equipment
+• Collaborative and innovative work environment
+
+How to Apply:
+Please submit your resume and a brief cover letter explaining your interest in AI/ML and relevant experience.
