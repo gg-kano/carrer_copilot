@@ -4,38 +4,56 @@ Merges resume chunks and compares with JD to determine qualification
 """
 
 import json
-import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import sys
 import os
-from dotenv import load_dotenv
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
-# Load environment variables from .env file
-load_dotenv(os.path.join(parent_dir, '.env'))
-
+from config import Config
 from prompt.match_resume_jd import generate_match_prompt
 import google.generativeai as genai
+from utils.logger import get_logger, log_execution_time
+from utils.text_utils import extract_json_from_text, truncate_text
+from utils.exceptions import MissingAPIKeyError, LLMError
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 class ResumeJDMatcher:
     """Matches resumes with job descriptions and provides qualification analysis"""
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key: str = None):
         """
         Initialize the matcher with LLM client
 
         Args:
-            api_key: Google API key for Gemini
+            api_key: Google API key (optional, will use config if not provided)
+
+        Raises:
+            MissingAPIKeyError: If API key is not found
         """
-        if api_key is None:
-            api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("Google API key not found. Please set GOOGLE_API_KEY in .env file")
-        genai.configure(api_key=api_key)
-        self.llm_client = genai.GenerativeModel("gemini-2.0-flash-exp")
+        try:
+            logger.info("Initializing ResumeJDMatcher")
+
+            if api_key is None:
+                api_key = Config.GOOGLE_API_KEY
+            if not api_key:
+                raise MissingAPIKeyError(
+                    "Google API key not found. Please set GOOGLE_API_KEY in .env file"
+                )
+
+            genai.configure(api_key=api_key)
+            self.llm_client = genai.GenerativeModel(Config.MATCHING_LLM_MODEL)
+            logger.debug(f"LLM client initialized with {Config.MATCHING_LLM_MODEL}")
+
+            logger.info("ResumeJDMatcher initialization completed")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize ResumeJDMatcher: {str(e)}", exc_info=True)
+            raise
 
     def merge_resume_chunks(self, chunks: List[Dict[str, Any]]) -> str:
         """
@@ -119,6 +137,7 @@ class ResumeJDMatcher:
 
         return '\n\n'.join(merged_sections)
 
+    @log_execution_time(logger)
     def match_resume_with_jd(
         self,
         resume_chunks: List[Dict[str, Any]],
@@ -135,11 +154,14 @@ class ResumeJDMatcher:
             Dictionary containing match results with qualification decision
         """
         try:
+            logger.info("Matching resume with job description")
+
             # Merge chunks
             resume_content = self.merge_resume_chunks(resume_chunks)
             jd_content = self.merge_jd_chunks(jd_chunks)
 
             if not resume_content or not jd_content:
+                logger.warning("Missing resume or job description content")
                 return {
                     "qualified": False,
                     "match_score": 0,
@@ -151,33 +173,46 @@ class ResumeJDMatcher:
             prompt = generate_match_prompt(resume_content, jd_content)
 
             # Call LLM
-            response = self.llm_client.generate_content(prompt)
-            response_text = response.text.strip()
+            try:
+                response = self.llm_client.generate_content(prompt)
+                response_text = response.text.strip()
+                logger.debug(f"Received match response ({len(response_text)} chars)")
+            except Exception as e:
+                logger.error(f"LLM API call failed: {str(e)}", exc_info=True)
+                raise LLMError(
+                    f"Failed to call LLM API: {str(e)}",
+                    details={'model': Config.MATCHING_LLM_MODEL}
+                )
 
             # Parse JSON response
             try:
-                # Try to extract JSON if wrapped in markdown
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if json_match:
-                    result = json.loads(json_match.group())
+                json_str = extract_json_from_text(response_text)
+                if json_str:
+                    result = json.loads(json_str)
+                    logger.info(f"Match completed: score={result.get('match_score', 0)}")
+                    return result
                 else:
-                    result = json.loads(response_text)
-
-                return result
+                    logger.error("No JSON found in LLM response")
+                    return {
+                        "qualified": False,
+                        "match_score": 0,
+                        "summary": "Error parsing match results",
+                        "error": "No JSON found in response",
+                        "raw_response": truncate_text(response_text, 500)
+                    }
 
             except json.JSONDecodeError as e:
-                print(f"[Warning] Failed to parse LLM response as JSON: {e}")
-                print(f"Raw response: {response_text[:500]}")
+                logger.error(f"Failed to parse LLM response as JSON: {str(e)}")
                 return {
                     "qualified": False,
                     "match_score": 0,
                     "summary": "Error parsing match results",
                     "error": f"JSON parsing failed: {str(e)}",
-                    "raw_response": response_text
+                    "raw_response": truncate_text(response_text, 500)
                 }
 
         except Exception as e:
-            print(f"[Error] Matching failed: {e}")
+            logger.error(f"Matching failed: {str(e)}", exc_info=True)
             return {
                 "qualified": False,
                 "match_score": 0,
@@ -212,11 +247,12 @@ class ResumeJDMatcher:
 
         return results
 
+    @log_execution_time(logger)
     def rough_match_resumes(
         self,
         db_storage,
         jd_text: str,
-        top_k: int = 50
+        top_k: int = None
     ) -> List[Dict[str, Any]]:
         """
         Rough matching mode: Query JD against all resume chunks and rank by similarity
@@ -224,17 +260,24 @@ class ResumeJDMatcher:
         Args:
             db_storage: ChromaDB storage instance
             jd_text: Job description text to query
-            top_k: Number of top chunks to retrieve
+            top_k: Number of top chunks to retrieve (default from config)
 
         Returns:
             List of resume rankings with scores
         """
+        if top_k is None:
+            top_k = Config.ROUGH_MATCH_TOP_K
+
+        logger.info(f"Running rough match with top_k={top_k}")
+
         # Search for similar resume chunks using JD text
         search_results = db_storage.search_similar_chunks(
             query_text=jd_text,
             document_type="resume",
             top_k=top_k
         )
+
+        logger.debug(f"Retrieved {len(search_results)} chunk results")
 
         # Aggregate scores by resume_id
         resume_scores = {}
@@ -259,7 +302,7 @@ class ResumeJDMatcher:
                 resume_top_chunks[resume_id].append({
                     'chunk_id': result['chunk_id'],
                     'field': result['metadata'].get('field', 'unknown'),
-                    'content': result['content'][:200] + '...',  # Preview
+                    'content': truncate_text(result['content'], Config.CHUNK_PREVIEW_LENGTH),
                     'similarity': similarity
                 })
 
@@ -275,14 +318,14 @@ class ResumeJDMatcher:
             match_score = max(0, min(100, (avg_score + 1) * 50))  # Convert [-1,1] to [0,100]
 
             # Determine qualification based on score
-            qualified = match_score >= 60
+            qualified = match_score >= Config.MIN_MATCH_SCORE
 
             # Determine recommendation
-            if match_score >= 80:
+            if match_score >= Config.STRONG_MATCH_THRESHOLD:
                 recommendation = "STRONG_MATCH"
-            elif match_score >= 65:
+            elif match_score >= Config.GOOD_MATCH_THRESHOLD:
                 recommendation = "GOOD_MATCH"
-            elif match_score >= 50:
+            elif match_score >= Config.PARTIAL_MATCH_THRESHOLD:
                 recommendation = "PARTIAL_MATCH"
             else:
                 recommendation = "NOT_MATCH"
@@ -303,15 +346,17 @@ class ResumeJDMatcher:
         # Sort by match_score descending
         results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
 
+        logger.info(f"Rough match completed: found {len(results)} candidate resumes")
         return results
 
+    @log_execution_time(logger)
     def hybrid_match_resumes(
         self,
         db_storage,
         jd_text: str,
         jd_chunks: List[Dict[str, Any]],
-        rough_top_k: int = 50,
-        precise_top_n: int = 10
+        rough_top_k: int = None,
+        precise_top_n: int = None
     ) -> List[Dict[str, Any]]:
         """
         Hybrid matching mode: First filter with rough matching, then precise analysis on top candidates
@@ -320,13 +365,18 @@ class ResumeJDMatcher:
             db_storage: ChromaDB storage instance
             jd_text: Job description text for rough matching
             jd_chunks: JD chunks for precise matching
-            rough_top_k: Number of chunks to retrieve in rough mode
-            precise_top_n: Number of top resumes to analyze with precise mode
+            rough_top_k: Number of chunks to retrieve in rough mode (default from config)
+            precise_top_n: Number of top resumes to analyze with precise mode (default from config)
 
         Returns:
             List of match results with both rough and precise analysis for top candidates
         """
-        print(f"[Hybrid Mode] Step 1: Running rough matching with top_k={rough_top_k}")
+        if rough_top_k is None:
+            rough_top_k = Config.HYBRID_ROUGH_TOP_K
+        if precise_top_n is None:
+            precise_top_n = Config.HYBRID_PRECISE_TOP_N
+
+        logger.info(f"[Hybrid Mode] Step 1: Running rough matching with top_k={rough_top_k}")
 
         # Step 1: Rough matching to filter candidates
         rough_results = self.rough_match_resumes(
@@ -336,10 +386,11 @@ class ResumeJDMatcher:
         )
 
         if not rough_results:
+            logger.warning("[Hybrid Mode] No results from rough matching")
             return []
 
-        print(f"[Hybrid Mode] Found {len(rough_results)} resumes in rough matching")
-        print(f"[Hybrid Mode] Step 2: Running precise matching on top {precise_top_n} resumes")
+        logger.info(f"[Hybrid Mode] Found {len(rough_results)} resumes in rough matching")
+        logger.info(f"[Hybrid Mode] Step 2: Running precise matching on top {precise_top_n} resumes")
 
         # Step 2: Get top N resumes from rough matching
         top_resumes = rough_results[:precise_top_n]
@@ -355,7 +406,7 @@ class ResumeJDMatcher:
         # Step 4: Run precise matching on filtered resumes
         precise_results = []
         for resume_id, resume_chunks in resume_chunks_list:
-            print(f"[Hybrid Mode] Analyzing {resume_id} with LLM...")
+            logger.debug(f"[Hybrid Mode] Analyzing {resume_id} with LLM")
             precise_result = self.match_resume_with_jd(resume_chunks, jd_chunks)
             precise_result['resume_id'] = resume_id
 
@@ -381,6 +432,9 @@ class ResumeJDMatcher:
         # Sort by match_score descending (precise results will naturally rank higher)
         all_results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
 
-        print(f"[Hybrid Mode] Complete: {len(precise_results)} with precise analysis, {len(remaining_resumes)} rough only")
+        logger.info(
+            f"[Hybrid Mode] Complete: {len(precise_results)} with precise analysis, "
+            f"{len(remaining_resumes)} rough only"
+        )
 
         return all_results

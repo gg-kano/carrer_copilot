@@ -1,22 +1,19 @@
 import sys
 import os
-from dotenv import load_dotenv
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
-# Load environment variables from .env file
-load_dotenv(os.path.join(parent_dir, '.env'))
-
+from config import Config
 from prompt.extract_resume import generate_resume_extraction_prompt
 from typing import List, Dict, Union, Tuple
-import re
 import json
 import hashlib
 import google.generativeai as genai
 from utils.cache_manager import create_text_cache
 from utils.chunk_size_manager import validate_and_split_chunks
 from utils.logger import get_logger, log_execution_time
+from utils.text_utils import extract_json_from_text
 from utils.exceptions import (
     ResumeParsingError,
     PDFExtractionError,
@@ -28,12 +25,12 @@ from utils.exceptions import (
 logger = get_logger(__name__)
 
 class ResumePreprocessor:
-    def __init__(self, api_key=None, enable_cache=True):
+    def __init__(self, api_key: str = None, enable_cache: bool = True):
         """
         Initialize resume preprocessor with LLM client and cache
 
         Args:
-            api_key: Google API key (optional, will use env var if not provided)
+            api_key: Google API key (optional, will use config if not provided)
             enable_cache: Whether to enable response caching
 
         Raises:
@@ -43,20 +40,20 @@ class ResumePreprocessor:
             logger.info("Initializing ResumePreprocessor")
 
             if api_key is None:
-                api_key = os.getenv("GOOGLE_API_KEY")
+                api_key = Config.GOOGLE_API_KEY
             if not api_key:
                 raise MissingAPIKeyError(
                     "Google API key not found. Please set GOOGLE_API_KEY in .env file"
                 )
 
             genai.configure(api_key=api_key)
-            self.llm_client = genai.GenerativeModel("gemini-2.5-flash")
-            logger.debug("LLM client initialized with gemini-2.5-flash")
+            self.llm_client = genai.GenerativeModel(Config.RESUME_LLM_MODEL)
+            logger.debug(f"LLM client initialized with {Config.RESUME_LLM_MODEL}")
 
             # Initialize cache
-            self.enable_cache = enable_cache
-            if enable_cache:
-                self.cache = create_text_cache(cache_dir="./cache/resume_extractions")
+            self.enable_cache = enable_cache if enable_cache is not None else Config.ENABLE_CACHE
+            if self.enable_cache:
+                self.cache = create_text_cache(cache_dir=Config.RESUME_CACHE_DIR)
                 logger.info("LLM response caching enabled")
             else:
                 logger.info("LLM response caching disabled")
@@ -66,12 +63,6 @@ class ResumePreprocessor:
         except Exception as e:
             logger.error(f"Failed to initialize ResumePreprocessor: {str(e)}", exc_info=True)
             raise
-        
-    def normalize_text(self, text: str) -> str:
-        text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'http[s]?://\S+', '[URL]', text)
-        text = re.sub(r'\s+', ' ', text)
-        return text.strip()
     
     def _get_cache_key(self, content: Union[str, bytes]) -> str:
         """Generate a cache key from content (text or PDF bytes)"""
@@ -106,7 +97,7 @@ class ResumePreprocessor:
 
             # Check cache first if enabled
             if self.enable_cache:
-                cached_result = self.cache.get(cache_key, max_age_days=30)
+                cached_result = self.cache.get(cache_key, max_age_days=Config.CACHE_MAX_AGE_DAYS)
                 if cached_result is not None:
                     logger.info("Using cached LLM response (cache hit)")
                     return cached_result
@@ -132,7 +123,7 @@ class ResumePreprocessor:
                     # Wait for file processing
                     import time
                     attempts = 0
-                    max_attempts = 60  # 60 second timeout
+                    max_attempts = Config.MAX_PDF_UPLOAD_ATTEMPTS
                     while uploaded_file.state.name == "PROCESSING":
                         logger.debug(f"Processing PDF (attempt {attempts+1}/{max_attempts})")
                         time.sleep(1)
@@ -187,30 +178,21 @@ class ResumePreprocessor:
             logger.debug(f"Received response ({len(response_text)} chars)")
 
             try:
-                # Remove markdown code blocks if present
-                if response_text.startswith("```"):
-                    response_text = re.sub(r'^```(?:json)?\s*', '', response_text)
-                    response_text = re.sub(r'\s*```$', '', response_text)
-
-                data = json.loads(response_text)
-                logger.debug("Response parsed as valid JSON")
-
-            except json.JSONDecodeError as e:
-                logger.warning(f"Initial JSON parse failed, attempting extraction: {str(e)}")
-                match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if match:
-                    try:
-                        data = json.loads(match.group())
-                        logger.debug("Successfully extracted JSON from response")
-                    except json.JSONDecodeError:
-                        logger.error("Failed to extract valid JSON from response")
-                        raise ResumeParsingError(
-                            "Failed to parse LLM response as JSON",
-                            details={'response_preview': response_text[:200]}
-                        )
+                # Extract JSON using utility function
+                json_str = extract_json_from_text(response_text)
+                if json_str:
+                    data = json.loads(json_str)
+                    logger.debug("Response parsed as valid JSON")
                 else:
                     data = {}
                     logger.warning("No JSON found in response, using empty dict")
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from response: {str(e)}")
+                raise ResumeParsingError(
+                    "Failed to parse LLM response as JSON",
+                    details={'response_preview': response_text[:Config.CHUNK_PREVIEW_LENGTH]}
+                )
 
             # Ensure all required fields exist with default empty arrays
             data.setdefault("name", "Unknown")

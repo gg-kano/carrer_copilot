@@ -3,23 +3,27 @@ import pandas as pd
 from datetime import datetime
 import uuid
 import json
-from typing import List, Dict
+import re
+from typing import List, Dict, Optional, Set
 import PyPDF2
 import io
 import os
 from pathlib import Path
 import base64
 
-# Import your existing modules
+# Import configuration and modules
+from config import Config
 from database.chroma_db import ChromaDBStorage
 from process.resume_process import ResumePreprocessor
 from process.jd_process import JDPreprocessor
 from match.resume_jd_matcher import ResumeJDMatcher
+from utils.text_utils import clean_name_for_id, format_list_as_string
 
 class ResumeManagerApp:
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize the Resume Manager Application with necessary components."""
         if 'db' not in st.session_state:
-            st.session_state.db = ChromaDBStorage(persist_directory="./chroma_db")
+            st.session_state.db = ChromaDBStorage(persist_directory=Config.CHROMA_DB_PATH)
         if 'processor' not in st.session_state:
             st.session_state.processor = ResumePreprocessor()
         if 'jd_processor' not in st.session_state:
@@ -27,8 +31,16 @@ class ResumeManagerApp:
         if 'matcher' not in st.session_state:
             st.session_state.matcher = ResumeJDMatcher()
 
-    def extract_text_from_pdf(self, pdf_file):
-        """Extract text from PDF file"""
+    def extract_text_from_pdf(self, pdf_file) -> Optional[str]:
+        """
+        Extract text from PDF file.
+
+        Args:
+            pdf_file: PDF file object (file-like or BytesIO)
+
+        Returns:
+            Extracted text string, or None if extraction fails
+        """
         try:
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             text = ""
@@ -39,23 +51,29 @@ class ResumeManagerApp:
             st.error(f"Error reading PDF: {str(e)}")
             return None
 
-    def generate_resume_id_from_name(self, name: str, existing_ids: set = None) -> str:
-        """Generate a valid resume ID from a person's name"""
-        if not name or name.lower() == "unknown":
-            return f"resume_{uuid.uuid4().hex[:8]}"
+    def generate_resume_id_from_name(
+        self,
+        name: str,
+        existing_ids: Optional[Set[str]] = None
+    ) -> str:
+        """
+        Generate a valid resume ID from a person's name.
 
-        # Clean the name: remove special characters, convert to lowercase, replace spaces with underscores
-        import re
-        clean_name = re.sub(r'[^\w\s-]', '', name)  # Remove special chars except spaces and hyphens
-        clean_name = re.sub(r'\s+', '_', clean_name.strip())  # Replace spaces with underscores
-        clean_name = clean_name.lower()
+        Args:
+            name: Candidate's name
+            existing_ids: Set of existing IDs to avoid duplicates
 
-        # If name is empty after cleaning, use UUID
-        if not clean_name:
+        Returns:
+            Unique resume ID string
+        """
+        # Try to clean the name using utility function
+        cleaned = clean_name_for_id(name)
+
+        if not cleaned:
             return f"resume_{uuid.uuid4().hex[:8]}"
 
         # Handle duplicates by adding a number suffix
-        base_id = clean_name
+        base_id = cleaned
         resume_id = base_id
         counter = 1
 
@@ -70,21 +88,30 @@ class ResumeManagerApp:
 
         return resume_id
 
-    def _format_resume_summary(self, resume_data: dict) -> str:
-        """Format resume JSON data into a readable summary with newlines"""
+    def _format_resume_summary(self, resume_data: Dict) -> str:
+        """
+        Format resume JSON data into a readable summary with newlines.
+
+        Args:
+            resume_data: Dictionary containing parsed resume information
+
+        Returns:
+            Formatted summary string
+        """
         summary_parts = []
 
         # Name
         name = resume_data.get('name', 'Unknown')
         summary_parts.append(f"**👤 Name:** {name}")
 
-        # Skills (top 10)
+        # Skills (using configured max display count)
         skills = resume_data.get('skills', [])
         if skills:
-            top_skills = skills[:10]
-            skills_str = ', '.join(top_skills)
-            if len(skills) > 10:
-                skills_str += f" ... (+{len(skills) - 10} more)"
+            skills_str = format_list_as_string(
+                skills,
+                max_items=Config.MAX_SKILLS_DISPLAY,
+                separator=', '
+            )
             summary_parts.append(f"**💻 Skills:** {skills_str}")
 
         # Experience summary
@@ -117,8 +144,21 @@ class ResumeManagerApp:
 
         return "\n\n".join(summary_parts)
 
-    def display_pdf(self, pdf_bytes: bytes, height: int = 800):
-        """Display PDF using base64 encoding and iframe"""
+    def display_pdf(
+        self,
+        pdf_bytes: bytes,
+        height: int = None
+    ) -> None:
+        """
+        Display PDF using base64 encoding and iframe.
+
+        Args:
+            pdf_bytes: PDF file content as bytes
+            height: Height of PDF viewer in pixels (default from config)
+        """
+        if height is None:
+            height = Config.DEFAULT_PDF_VIEWER_HEIGHT
+
         base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
         pdf_display = f'''
             <iframe
@@ -131,9 +171,36 @@ class ResumeManagerApp:
         '''
         st.markdown(pdf_display, unsafe_allow_html=True)
 
-    def process_batch_upload(self, folder_path: str, user_id: str = "", skip_existing: bool = True, use_filename_as_id: bool = True):
-        """Process all PDF files in a folder and upload them to the database"""
+    def process_batch_upload(
+        self,
+        folder_path: str,
+        user_id: str = "",
+        skip_existing: bool = True,
+        use_filename_as_id: bool = True
+    ) -> None:
+        """
+        Process all PDF files in a folder and upload them to the database.
+
+        Args:
+            folder_path: Path to folder containing PDF files
+            user_id: Optional user identifier
+            skip_existing: Whether to skip resumes that already exist
+            use_filename_as_id: Use filename as ID instead of extracted name
+        """
         try:
+            # Input validation
+            if not folder_path:
+                st.error("❌ Please provide a folder path")
+                return
+
+            if not os.path.exists(folder_path):
+                st.error(f"❌ Folder not found: {folder_path}")
+                return
+
+            if not os.path.isdir(folder_path):
+                st.error(f"❌ Path is not a directory: {folder_path}")
+                return
+
             # Find all PDF files in the folder
             pdf_files = list(Path(folder_path).glob("*.pdf"))
 
@@ -160,13 +227,13 @@ class ResumeManagerApp:
                 status_text.text(f"Processing {idx + 1}/{len(pdf_files)}: {pdf_path.name}")
 
                 try:
-                    # Read PDF file as bytes
+                    # Read PDF file once as bytes
                     with open(pdf_path, 'rb') as pdf_file:
                         pdf_bytes = pdf_file.read()
 
-                    # Also extract text for storage (fallback)
-                    with open(pdf_path, 'rb') as pdf_file:
-                        resume_text = self.extract_text_from_pdf(pdf_file)
+                    # Extract text from the same bytes (avoiding duplicate file read)
+                    pdf_file_obj = io.BytesIO(pdf_bytes)
+                    resume_text = self.extract_text_from_pdf(pdf_file_obj)
 
                     if not resume_text:
                         resume_text = ""  # Use empty string if extraction fails

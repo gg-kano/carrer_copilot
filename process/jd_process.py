@@ -1,58 +1,119 @@
-import re
 import json
 from typing import List, Dict
 import sys
 import os
-from dotenv import load_dotenv
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
-# Load environment variables from .env file
-load_dotenv(os.path.join(parent_dir, '.env'))
-
+from config import Config
 from prompt.extract_job_description import generate_job_description_prompt
 import google.generativeai as genai
 from utils.chunk_size_manager import validate_and_split_chunks
+from utils.text_utils import normalize_text, extract_json_from_text
+from utils.logger import get_logger, log_execution_time
+from utils.exceptions import MissingAPIKeyError, LLMError
+
+# Initialize logger
+logger = get_logger(__name__)
+
 
 class JDPreprocessor:
-    def __init__(self, api_key=None):
-        if api_key is None:
-            api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("Google API key not found. Please set GOOGLE_API_KEY in .env file")
-        genai.configure(api_key=api_key)
-        self.llm_client = genai.GenerativeModel("gemini-2.5-flash")
-        
-    def normalize_text(self, text: str) -> str:
-        text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'http[s]?://\S+', '[URL]', text)
-        text = re.sub(r'\s+', ' ', text)
-        return text.strip()
-    
-    def parse_with_llm(self, jd_text: str) -> Dict[str, str]:
-        prompt = generate_job_description_prompt()
+    def __init__(self, api_key: str = None):
+        """
+        Initialize job description preprocessor with LLM client
 
-        response = self.llm_client.generate_content([prompt, jd_text])
-        response_text = response.text.strip()
+        Args:
+            api_key: Google API key (optional, will use config if not provided)
+
+        Raises:
+            MissingAPIKeyError: If API key is not found
+        """
         try:
+            logger.info("Initializing JDPreprocessor")
 
-            data = json.loads(response_text)
-        except json.JSONDecodeError:
+            if api_key is None:
+                api_key = Config.GOOGLE_API_KEY
+            if not api_key:
+                raise MissingAPIKeyError(
+                    "Google API key not found. Please set GOOGLE_API_KEY in .env file"
+                )
 
-            match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            data = json.loads(match.group()) if match else {}
+            genai.configure(api_key=api_key)
+            self.llm_client = genai.GenerativeModel(Config.JD_LLM_MODEL)
+            logger.debug(f"LLM client initialized with {Config.JD_LLM_MODEL}")
 
-        # Normalize string values only (skip nested dicts/lists)
-        normalized_data = {}
-        for key, val in data.items():
-            if isinstance(val, str):
-                normalized_data[key] = self.normalize_text(val)
+            logger.info("JDPreprocessor initialization completed")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize JDPreprocessor: {str(e)}", exc_info=True)
+            raise
+    
+    @log_execution_time(logger)
+    def parse_with_llm(self, jd_text: str) -> Dict[str, str]:
+        """
+        Parse job description using LLM
+
+        Args:
+            jd_text: Job description text
+
+        Returns:
+            Dictionary containing parsed JD data
+
+        Raises:
+            LLMError: If LLM API call fails
+        """
+        try:
+            logger.info("Parsing job description with LLM")
+
+            prompt = generate_job_description_prompt()
+
+            try:
+                response = self.llm_client.generate_content([prompt, jd_text])
+                response_text = response.text.strip()
+            except Exception as e:
+                logger.error(f"LLM API call failed: {str(e)}", exc_info=True)
+                raise LLMError(
+                    f"Failed to call LLM API: {str(e)}",
+                    details={'model': Config.JD_LLM_MODEL}
+                )
+
+            logger.debug(f"Received response ({len(response_text)} chars)")
+
+            # Extract JSON using utility function
+            json_str = extract_json_from_text(response_text)
+            if json_str:
+                try:
+                    data = json.loads(json_str)
+                    logger.debug("Response parsed as valid JSON")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON: {str(e)}")
+                    data = {}
             else:
-                normalized_data[key] = val
+                logger.warning("No JSON found in response, using empty dict")
+                data = {}
 
-        normalized_data["full_text"] = self.normalize_text(jd_text)
-        return normalized_data
+            # Normalize string values only (skip nested dicts/lists)
+            normalized_data = {}
+            for key, val in data.items():
+                if isinstance(val, str):
+                    normalized_data[key] = normalize_text(val)
+                else:
+                    normalized_data[key] = val
+
+            normalized_data["full_text"] = normalize_text(jd_text)
+
+            logger.info("Job description parsed successfully")
+            return normalized_data
+
+        except Exception as e:
+            logger.error(f"JD parsing failed: {str(e)}", exc_info=True)
+            if isinstance(e, LLMError):
+                raise
+            raise LLMError(
+                f"Failed to parse job description: {str(e)}",
+                details={'error_type': type(e).__name__}
+            )
     
     def generate_hybrid_chunks(
             self,
@@ -191,19 +252,43 @@ class JDPreprocessor:
 
             return chunks
         
+    @log_execution_time(logger)
     def preprocess_jd(self, jd_text: str, jd_id: str) -> List[Dict[str, str]]:
+        """
+        Preprocess job description into optimized chunks
+
+        Args:
+            jd_text: Job description text
+            jd_id: Unique identifier for the job description
+
+        Returns:
+            List of optimized chunk dictionaries
+
+        Raises:
+            LLMError: If preprocessing fails
+        """
         try:
+            logger.info(f"Preprocessing job description (ID: {jd_id})")
+
             sections = self.parse_with_llm(jd_text)
 
             # Generate chunks
             chunks = self.generate_hybrid_chunks(sections, jd_id)
+            logger.debug(f"Generated {len(chunks)} chunks")
 
             # Optimize chunk sizes for better matching accuracy
-            print(f"🔧 Optimizing JD chunk sizes...")
+            logger.debug("Optimizing JD chunk sizes")
             optimized_chunks = validate_and_split_chunks(chunks)
-            print(f"✅ JD chunk optimization complete: {len(chunks)} → {len(optimized_chunks)} chunks")
+            logger.info(f"JD chunk optimization complete: {len(chunks)} → {len(optimized_chunks)} chunks")
 
             return optimized_chunks
+
         except Exception as e:
-            print(f"[Warning] LLM parsing failed: {e}.")
+            logger.error(f"JD preprocessing failed: {str(e)}", exc_info=True)
+            if isinstance(e, LLMError):
+                raise
+            raise LLMError(
+                f"Failed to preprocess job description: {str(e)}",
+                details={'jd_id': jd_id, 'error_type': type(e).__name__}
+            )
         
