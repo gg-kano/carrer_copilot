@@ -5,6 +5,8 @@ Merges resume chunks and compares with JD to determine qualification
 
 import json
 from typing import Dict, List, Any, Optional
+from functools import lru_cache
+import hashlib
 import sys
 import os
 
@@ -49,24 +51,48 @@ class ResumeJDMatcher:
             self.llm_client = genai.GenerativeModel(Config.MATCHING_LLM_MODEL)
             logger.debug(f"LLM client initialized with {Config.MATCHING_LLM_MODEL}")
 
+            # Initialize cache for merged content
+            self._merge_cache = {}
+
             logger.info("ResumeJDMatcher initialization completed")
 
         except Exception as e:
             logger.error(f"Failed to initialize ResumeJDMatcher: {str(e)}", exc_info=True)
             raise
 
-    def merge_resume_chunks(self, chunks: List[Dict[str, Any]]) -> str:
+    def _generate_chunks_hash(self, chunks: List[Dict[str, Any]]) -> str:
         """
-        Merge all chunks of a resume into a single text
+        Generate a unique hash for a list of chunks
+
+        Args:
+            chunks: List of chunk dictionaries
+
+        Returns:
+            Hash string
+        """
+        # Create a deterministic string representation
+        chunk_str = json.dumps(chunks, sort_keys=True)
+        return hashlib.md5(chunk_str.encode()).hexdigest()
+
+    def merge_resume_chunks(self, chunks: List[Dict[str, Any]], resume_id: str = None) -> str:
+        """
+        Merge all chunks of a resume into a single text (with caching)
 
         Args:
             chunks: List of chunk dictionaries with 'field' and 'content'
+            resume_id: Optional resume ID for cache key (more readable)
 
         Returns:
             Merged resume content as a single string
         """
         if not chunks:
             return ""
+
+        # Check cache first
+        cache_key = resume_id if resume_id else self._generate_chunks_hash(chunks)
+        if cache_key in self._merge_cache:
+            logger.debug(f"Cache hit for resume merge: {cache_key}")
+            return self._merge_cache[cache_key]
 
         # Group chunks by field
         field_groups = {}
@@ -104,7 +130,13 @@ class ResumeJDMatcher:
                 section_content = '\n'.join(contents)
                 merged_sections.append(f"## {field.upper()}\n{section_content}")
 
-        return '\n\n'.join(merged_sections)
+        merged_content = '\n\n'.join(merged_sections)
+
+        # Cache the result
+        self._merge_cache[cache_key] = merged_content
+        logger.debug(f"Cached resume merge: {cache_key}")
+
+        return merged_content
 
     def merge_jd_chunks(self, chunks: List[Dict[str, Any]]) -> str:
         """
@@ -136,6 +168,18 @@ class ResumeJDMatcher:
             merged_sections.append(f"## {field.upper()}\n{section_content}")
 
         return '\n\n'.join(merged_sections)
+
+    def clear_cache(self):
+        """Clear the merge cache"""
+        self._merge_cache.clear()
+        logger.info("Merge cache cleared")
+
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Get cache statistics"""
+        return {
+            'cached_items': len(self._merge_cache),
+            'total_memory_chars': sum(len(v) for v in self._merge_cache.values())
+        }
 
     @log_execution_time(logger)
     def match_resume_with_jd(
@@ -313,9 +357,20 @@ class ResumeJDMatcher:
             avg_score = total_score / chunk_count if chunk_count > 0 else 0
 
             # Convert similarity to 0-100 scale
-            # Assuming similarity is in range [-1, 1] or [0, 1]
-            # Adjust this based on your actual similarity metric
-            match_score = max(0, min(100, (avg_score + 1) * 50))  # Convert [-1,1] to [0,100]
+            # ChromaDB cosine similarity is typically in [0, 1] range
+            # Apply non-linear scaling to better differentiate candidates
+            if avg_score >= 0 and avg_score <= 1:
+                # Direct percentage conversion with slight boosting for high scores
+                # This makes scores above 0.8 more competitive
+                if avg_score >= 0.8:
+                    match_score = 80 + (avg_score - 0.8) * 100  # 0.8-1.0 → 80-100
+                else:
+                    match_score = avg_score * 100  # 0-0.8 → 0-80
+            else:
+                # Fallback for other similarity metrics (e.g., dot product)
+                match_score = max(0, min(100, (avg_score + 1) * 50))
+
+            match_score = round(match_score, 2)
 
             # Determine qualification based on score
             qualified = match_score >= Config.MIN_MATCH_SCORE
@@ -333,12 +388,12 @@ class ResumeJDMatcher:
             results.append({
                 'resume_id': resume_id,
                 'qualified': qualified,
-                'match_score': round(match_score, 2),
+                'match_score': match_score,
                 'recommendation': recommendation,
-                'summary': f"Found {chunk_count} matching chunks with average similarity {avg_score:.2f}",
+                'summary': f"Found {chunk_count} matching chunks with average similarity {avg_score:.3f}",
                 'matching_chunks_count': chunk_count,
-                'total_similarity': round(total_score, 2),
-                'average_similarity': round(avg_score, 2),
+                'total_similarity': round(total_score, 4),
+                'average_similarity': round(avg_score, 4),
                 'top_matching_chunks': resume_top_chunks[resume_id][:5],  # Top 5 chunks
                 'matching_mode': 'rough'
             })
@@ -438,3 +493,275 @@ class ResumeJDMatcher:
         )
 
         return all_results
+
+    @log_execution_time(logger)
+    def explain_match(
+        self,
+        resume_id: str,
+        resume_chunks: List[Dict[str, Any]],
+        jd_chunks: List[Dict[str, Any]],
+        match_result: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate detailed explanation for why a resume matches or doesn't match a JD
+
+        Args:
+            resume_id: Resume identifier
+            resume_chunks: List of resume chunk dictionaries
+            jd_chunks: List of JD chunk dictionaries
+            match_result: Optional pre-computed match result to enhance
+
+        Returns:
+            Dictionary with detailed explanation including:
+            - Top matching sections
+            - Missing requirements
+            - Standout qualities
+            - Visual match breakdown
+        """
+        try:
+            logger.info(f"Generating match explanation for {resume_id}")
+
+            # Get or compute match result
+            if match_result is None:
+                match_result = self.match_resume_with_jd(resume_chunks, jd_chunks)
+
+            # Extract resume content by field
+            resume_by_field = {}
+            for chunk in resume_chunks:
+                field = chunk.get('metadata', {}).get('field', 'unknown')
+                content = chunk.get('content', '')
+                if field not in resume_by_field:
+                    resume_by_field[field] = []
+                resume_by_field[field].append(content)
+
+            # Extract JD requirements by field
+            jd_by_field = {}
+            for chunk in jd_chunks:
+                field = chunk.get('metadata', {}).get('field', 'unknown')
+                content = chunk.get('content', '')
+                if field not in jd_by_field:
+                    jd_by_field[field] = []
+                jd_by_field[field].append(content)
+
+            # Build explanation
+            explanation = {
+                'resume_id': resume_id,
+                'overall_score': match_result.get('match_score', 0),
+                'qualified': match_result.get('qualified', False),
+                'recommendation': match_result.get('recommendation', 'UNKNOWN'),
+
+                # Breakdown by section
+                'field_breakdown': {},
+
+                # Key insights
+                'top_strengths': match_result.get('strengths', [])[:3],
+                'top_weaknesses': match_result.get('weaknesses', [])[:3],
+
+                # Actionable insights
+                'missing_skills': [],
+                'standout_qualities': [],
+
+                # Detailed analysis
+                'detailed_scores': match_result.get('detailed_analysis', {}),
+
+                # Summary
+                'summary': match_result.get('summary', ''),
+                'next_steps': match_result.get('next_steps', 'Review candidate profile')
+            }
+
+            # Analyze field coverage
+            for field in ['skills', 'experience', 'education', 'certifications']:
+                has_resume = field in resume_by_field and resume_by_field[field]
+                has_jd = field in jd_by_field and jd_by_field[field]
+
+                explanation['field_breakdown'][field] = {
+                    'resume_has': has_resume,
+                    'jd_requires': has_jd,
+                    'match_status': 'match' if (has_resume and has_jd) else
+                                   ('missing' if has_jd else 'extra'),
+                    'resume_content_preview': ' '.join(resume_by_field.get(field, []))[:200] if has_resume else None,
+                    'jd_requirement_preview': ' '.join(jd_by_field.get(field, []))[:200] if has_jd else None
+                }
+
+            # Extract missing skills from weaknesses
+            for weakness in match_result.get('weaknesses', []):
+                if any(keyword in weakness.lower() for keyword in ['lack', 'missing', 'no', 'limited', 'insufficient']):
+                    explanation['missing_skills'].append(weakness)
+
+            # Extract standout qualities from strengths
+            for strength in match_result.get('strengths', []):
+                if any(keyword in strength.lower() for keyword in ['strong', 'excellent', 'extensive', 'proven', 'expert']):
+                    explanation['standout_qualities'].append(strength)
+
+            logger.info(f"Match explanation generated for {resume_id}")
+            return explanation
+
+        except Exception as e:
+            logger.error(f"Failed to generate match explanation: {str(e)}", exc_info=True)
+            return {
+                'resume_id': resume_id,
+                'error': str(e),
+                'summary': 'Failed to generate explanation'
+            }
+
+    def batch_explain_matches(
+        self,
+        match_results: List[Dict[str, Any]],
+        resume_chunks_dict: Dict[str, List[Dict[str, Any]]],
+        jd_chunks: List[Dict[str, Any]],
+        top_n: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate explanations for top N match results
+
+        Args:
+            match_results: List of match results from matching methods
+            resume_chunks_dict: Dictionary mapping resume_id to chunks
+            jd_chunks: JD chunks
+            top_n: Number of top results to explain
+
+        Returns:
+            List of explanations for top N candidates
+        """
+        explanations = []
+
+        # Sort by score and take top N
+        sorted_results = sorted(match_results, key=lambda x: x.get('match_score', 0), reverse=True)
+        top_results = sorted_results[:top_n]
+
+        for result in top_results:
+            resume_id = result.get('resume_id')
+            if resume_id and resume_id in resume_chunks_dict:
+                explanation = self.explain_match(
+                    resume_id=resume_id,
+                    resume_chunks=resume_chunks_dict[resume_id],
+                    jd_chunks=jd_chunks,
+                    match_result=result
+                )
+                explanations.append(explanation)
+
+        return explanations
+
+    def calculate_adaptive_parameters(
+        self,
+        db_storage,
+        mode: str = 'hybrid'
+    ) -> Dict[str, int]:
+        """
+        Dynamically calculate optimal matching parameters based on database size
+
+        Args:
+            db_storage: ChromaDB storage instance
+            mode: Matching mode ('rough', 'hybrid')
+
+        Returns:
+            Dictionary with recommended parameters
+        """
+        try:
+            # Get total resume count
+            total_resumes = db_storage.count_documents(document_type='resume')
+
+            logger.info(f"Calculating adaptive parameters for {total_resumes} resumes in {mode} mode")
+
+            if mode == 'rough':
+                # For rough mode, adjust top_k based on database size
+                if total_resumes <= 20:
+                    top_k = total_resumes * 3  # Small DB: get more chunks per resume
+                elif total_resumes <= 100:
+                    top_k = 50  # Medium DB: standard setting
+                elif total_resumes <= 500:
+                    top_k = min(100, total_resumes // 2)  # Large DB: proportional
+                else:
+                    top_k = 200  # Very large DB: cap at 200
+
+                params = {
+                    'top_k': top_k,
+                    'total_resumes': total_resumes
+                }
+
+            elif mode == 'hybrid':
+                # For hybrid mode, calculate both rough and precise parameters
+                if total_resumes <= 10:
+                    # Very small DB: use precise mode for all
+                    rough_top_k = total_resumes * 5
+                    precise_top_n = total_resumes
+                elif total_resumes <= 50:
+                    # Small DB: analyze 50% with LLM
+                    rough_top_k = total_resumes * 3
+                    precise_top_n = max(5, total_resumes // 2)
+                elif total_resumes <= 200:
+                    # Medium DB: analyze top 20%
+                    rough_top_k = min(100, total_resumes)
+                    precise_top_n = max(10, total_resumes // 5)
+                elif total_resumes <= 1000:
+                    # Large DB: analyze top 5%
+                    rough_top_k = 200
+                    precise_top_n = max(15, total_resumes // 20)
+                else:
+                    # Very large DB: fixed cap
+                    rough_top_k = 300
+                    precise_top_n = 20
+
+                params = {
+                    'rough_top_k': rough_top_k,
+                    'precise_top_n': precise_top_n,
+                    'total_resumes': total_resumes,
+                    'precise_percentage': round((precise_top_n / total_resumes) * 100, 1) if total_resumes > 0 else 0
+                }
+
+            else:
+                # Default to config values
+                params = {
+                    'rough_top_k': Config.HYBRID_ROUGH_TOP_K,
+                    'precise_top_n': Config.HYBRID_PRECISE_TOP_N,
+                    'total_resumes': total_resumes
+                }
+
+            logger.info(f"Adaptive parameters: {params}")
+            return params
+
+        except Exception as e:
+            logger.error(f"Failed to calculate adaptive parameters: {str(e)}", exc_info=True)
+            # Fallback to config defaults
+            return {
+                'rough_top_k': Config.HYBRID_ROUGH_TOP_K,
+                'precise_top_n': Config.HYBRID_PRECISE_TOP_N,
+                'total_resumes': 0
+            }
+
+    @log_execution_time(logger)
+    def adaptive_hybrid_match(
+        self,
+        db_storage,
+        jd_text: str,
+        jd_chunks: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid matching with automatically adjusted parameters based on database size
+
+        Args:
+            db_storage: ChromaDB storage instance
+            jd_text: Job description text for rough matching
+            jd_chunks: JD chunks for precise matching
+
+        Returns:
+            List of match results with adaptive parameter selection
+        """
+        # Calculate optimal parameters
+        params = self.calculate_adaptive_parameters(db_storage, mode='hybrid')
+
+        logger.info(
+            f"[Adaptive Hybrid] Using dynamic parameters: "
+            f"rough_top_k={params['rough_top_k']}, "
+            f"precise_top_n={params['precise_top_n']} "
+            f"(analyzing {params.get('precise_percentage', 0)}% of {params['total_resumes']} resumes)"
+        )
+
+        # Use hybrid matching with calculated parameters
+        return self.hybrid_match_resumes(
+            db_storage=db_storage,
+            jd_text=jd_text,
+            jd_chunks=jd_chunks,
+            rough_top_k=params['rough_top_k'],
+            precise_top_n=params['precise_top_n']
+        )

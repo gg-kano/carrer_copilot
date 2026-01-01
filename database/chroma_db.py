@@ -407,6 +407,26 @@ class ChromaDBStorage:
                 details={'document_id': document_id}
             )
     
+    def count_documents(self, document_type: Optional[str] = None) -> int:
+        """
+        Count documents, optionally filtered by type
+
+        Args:
+            document_type: Filter by document type (optional)
+
+        Returns:
+            Number of documents
+        """
+        try:
+            where_filter = {"document_type": document_type} if document_type else None
+            results = self.documents_collection.get(where=where_filter)
+            count = len(results['ids'])
+            logger.debug(f"Document count (type: {document_type or 'all'}): {count}")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to count documents: {str(e)}", exc_info=True)
+            return 0
+
     def list_all_documents(self, document_type: Optional[str] = None) -> List[Dict]:
         """
         List all documents, optionally filtered by type
