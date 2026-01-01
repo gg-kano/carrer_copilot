@@ -11,7 +11,10 @@
       "Bash(python:*)",
       "Bash(find:*)",
       "Bash(nul)",
-      "Bash(if exist process__pycache__ rmdir /s /q process__pycache__)"
+      "Bash(if exist process__pycache__ rmdir /s /q process__pycache__)",
+      "Bash(rm:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
