@@ -18,91 +18,94 @@ Your output must:
   "location": "",
   "employment_type": "",
   "salary": "",
-  "requirements": {
-    "technical_skills": [],
-    "soft_skills": []
+  "skills": {
+    "technical": [],
+    "soft": []
   },
+  "experience": [
+    {
+      "years_required": "",
+      "level": "",
+      "description": ""
+    }
+  ],
   "responsibilities": [],
-  "experience": {
-    "years_required": "",
-    "level": "",
-    "description": ""
-  },
-  "education": {
-    "degree": "",
-    "field": "",
-    "requirements": ""
-  },
-  "qualifications": {
-    "required": [],
-    "preferred": []
-  },
+  "education": [
+    {
+      "degree": "",
+      "field": "",
+      "requirements": ""
+    }
+  ],
+  "certifications": [],
   "benefits": [],
-  "about_company": "",
-  "application_process": ""
+  "about_company": ""
 }
 
-### CRITICAL SEPARATION RULES - READ CAREFULLY:
+### EXTRACTION RULES - ALIGN WITH RESUME FORMAT:
 
-1. **requirements.technical_skills** (ARRAY of strings):
+1. **skills.technical** (ARRAY of strings):
    - ONLY technical skills: programming languages, tools, frameworks, cloud platforms, databases
    - Examples: ["Python", "SQL", "AWS", "Docker", "Kubernetes", "HuggingFace", "LangChain"]
    - DO NOT include years of experience, degrees, or soft skills here
 
-2. **requirements.soft_skills** (ARRAY of strings):
+2. **skills.soft** (ARRAY of strings):
    - ONLY soft/interpersonal skills
    - Examples: ["Communication", "Teamwork", "Stakeholder management", "Problem solving"]
    - DO NOT include technical skills or experience here
 
-3. **experience** (OBJECT with three fields):
+3. **experience** (ARRAY of objects, similar to resume experience):
+   - Each entry represents an experience requirement
    - years_required: "3-5 years" or "5+ years" etc.
    - level: "Junior", "Senior", "Mid-level" etc.
    - description: Brief description of experience type (e.g., "in AI engineering, machine learning, and data science")
-   - DO NOT mix this with requirements or education
 
-4. **education** (OBJECT with three fields):
+4. **education** (ARRAY of objects, matching resume education format):
+   - Each entry represents an education requirement
    - degree: "Bachelor's", "Master's", "PhD" etc.
    - field: "Computer Science", "Data Science" etc.
    - requirements: Any additional education requirements
-   - DO NOT mix this with requirements or experience
 
 5. **responsibilities** (ARRAY of strings):
    - Each responsibility as a separate item
    - These are tasks the person WILL DO, not what they NEED TO HAVE
 
-6. **qualifications.required** (ARRAY of strings):
-   - Other required qualifications NOT covered in skills/experience/education
-   - Examples: certifications, specific domain knowledge
-
-7. **qualifications.preferred** (ARRAY of strings):
-   - Nice-to-have qualifications
+6. **certifications** (ARRAY of strings):
+   - Required or preferred certifications
+   - Examples: ["AWS Certified", "PMP", "CPA"]
 
 ### EXAMPLE OF CORRECT EXTRACTION:
 
-Input text: "We need a Senior Data Scientist with 5+ years in ML. Must know Python, AWS, and have a Master's in CS. Strong communication skills required."
+Input text: "We need a Senior Data Scientist with 5+ years in ML. Must know Python, AWS, and have a Master's in CS. Strong communication skills required. AWS certification preferred."
 
 Correct output:
 {
   "title": "Senior Data Scientist",
-  "requirements": {
-    "technical_skills": ["Python", "AWS", "Machine Learning"],
-    "soft_skills": ["Communication"]
+  "skills": {
+    "technical": ["Python", "AWS", "Machine Learning"],
+    "soft": ["Communication"]
   },
-  "experience": {
-    "years_required": "5+ years",
-    "level": "Senior",
-    "description": "in Machine Learning"
-  },
-  "education": {
-    "degree": "Master's",
-    "field": "Computer Science",
-    "requirements": ""
-  }
+  "experience": [
+    {
+      "years_required": "5+ years",
+      "level": "Senior",
+      "description": "in Machine Learning and Data Science"
+    }
+  ],
+  "education": [
+    {
+      "degree": "Master's",
+      "field": "Computer Science",
+      "requirements": ""
+    }
+  ],
+  "certifications": ["AWS Certified"],
+  "responsibilities": []
 }
 
 WRONG output (DO NOT DO THIS):
 {
-  "requirements": "5+ years with Python, AWS, Master's in CS",
+  "skills": "Python, AWS, Communication",
   "experience": "5+ years",
   "education": "Master's in CS"
 }

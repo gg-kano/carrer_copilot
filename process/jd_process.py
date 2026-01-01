@@ -120,137 +120,143 @@ class JDPreprocessor:
             jd_json: Dict,
             jd_id: str = None
         ) -> List[Dict[str, str]]:
+        """
+        Generate chunks from JD JSON in a format aligned with resume chunks
 
-            if jd_id is None:
-                import uuid
-                jd_id = f"jd_{uuid.uuid4().hex[:12]}"
+        Args:
+            jd_json: Parsed JD data
+            jd_id: Job description identifier
 
-            chunks = []
+        Returns:
+            List of chunk dictionaries
+        """
+        if jd_id is None:
+            import uuid
+            jd_id = f"jd_{uuid.uuid4().hex[:12]}"
 
-            def add_chunk(field_name: str, content: str):
-                """
-                Add chunk to list
-                """
-                if content.strip():
-                    chunks.append({
-                        "chunk_id": f"{jd_id}_{field_name}",
+        chunks = []
+
+        def add_chunk(field_name: str, content: str, chunk_index: int = None):
+            """Add chunk to list"""
+            if content.strip():
+                chunk_suffix = f"_{chunk_index}_{field_name}" if chunk_index is not None else f"_{field_name}"
+                chunks.append({
+                    "chunk_id": f"{jd_id}{chunk_suffix}",
+                    "field": field_name,
+                    "content": content.strip(),
+                    "metadata": {
+                        "document_id": jd_id,
+                        "document_type": "job_description",
                         "field": field_name,
-                        "content": content.strip(),
-                        "metadata": {
-                            "document_id": jd_id,
-                            "document_type": "job_description",
-                            "field": field_name,
-                        }
-                    })
+                    }
+                })
 
-            # Extract nested requirements structure (skills only)
-            requirements = jd_json.get('requirements', {})
-            technical_skills = requirements.get('technical_skills', []) if isinstance(requirements, dict) else []
-            soft_skills = requirements.get('soft_skills', []) if isinstance(requirements, dict) else []
+        # Extract skills (matching resume format)
+        skills = jd_json.get('skills', {})
+        technical_skills = skills.get('technical', []) if isinstance(skills, dict) else []
+        soft_skills = skills.get('soft', []) if isinstance(skills, dict) else []
 
-            # Extract experience structure
-            experience = jd_json.get('experience', {})
-            years_required = experience.get('years_required', '') if isinstance(experience, dict) else ''
-            experience_level = experience.get('level', '') if isinstance(experience, dict) else ''
-            experience_desc = experience.get('description', '') if isinstance(experience, dict) else ''
+        # Skills chunk (matching resume skills format)
+        skills_parts = []
+        if technical_skills:
+            tech_str = ', '.join(technical_skills) if isinstance(technical_skills, list) else str(technical_skills)
+            skills_parts.append(f"Technical Skills: {tech_str}")
+        if soft_skills:
+            soft_str = ', '.join(soft_skills) if isinstance(soft_skills, list) else str(soft_skills)
+            skills_parts.append(f"Soft Skills: {soft_str}")
 
-            # Extract education structure
-            education = jd_json.get('education', {})
-            education_degree = education.get('degree', '') if isinstance(education, dict) else ''
-            education_field = education.get('field', '') if isinstance(education, dict) else ''
-            education_reqs = education.get('requirements', '') if isinstance(education, dict) else ''
+        if skills_parts:
+            add_chunk("skills", ' | '.join(skills_parts))
 
-            # Extract qualifications
-            qualifications = jd_json.get('qualifications', {})
-            required_quals = qualifications.get('required', []) if isinstance(qualifications, dict) else []
-            preferred_quals = qualifications.get('preferred', []) if isinstance(qualifications, dict) else []
+        # Experience chunks (matching resume experience format)
+        experiences = jd_json.get('experience', [])
+        if isinstance(experiences, list):
+            for i, exp in enumerate(experiences):
+                exp_parts = []
+                years = exp.get('years_required', '')
+                level = exp.get('level', '')
+                desc = exp.get('description', '')
 
-            # Chunk 1: Requirements + Responsibilities (skills and responsibilities only, NO experience/education)
-            req_resp_parts = []
+                if years:
+                    exp_parts.append(f"Years Required: {years}")
+                if level:
+                    exp_parts.append(f"Level: {level}")
+                if desc:
+                    exp_parts.append(f"Description: {desc}")
 
-            if technical_skills:
-                tech_skills_str = ', '.join(technical_skills) if isinstance(technical_skills, list) else str(technical_skills)
-                req_resp_parts.append(f"Technical Skills Required: {tech_skills_str}")
+                if exp_parts:
+                    add_chunk("experience", ' | '.join(exp_parts), i)
 
-            if soft_skills:
-                soft_skills_str = ', '.join(soft_skills) if isinstance(soft_skills, list) else str(soft_skills)
-                req_resp_parts.append(f"Soft Skills Required: {soft_skills_str}")
+        # Education chunks (matching resume education format)
+        educations = jd_json.get('education', [])
+        if isinstance(educations, list):
+            for i, edu in enumerate(educations):
+                degree = edu.get('degree', '')
+                field = edu.get('field', '')
+                reqs = edu.get('requirements', '')
 
-            responsibilities = jd_json.get('responsibilities', [])
-            if responsibilities:
-                resp_str = '\n'.join([f"- {r}" for r in responsibilities]) if isinstance(responsibilities, list) else str(responsibilities)
-                req_resp_parts.append(f"Responsibilities:\n{resp_str}")
+                edu_parts = []
+                if degree and field:
+                    edu_parts.append(f"{degree} in {field}")
+                elif degree:
+                    edu_parts.append(degree)
+                elif field:
+                    edu_parts.append(f"Degree in {field}")
 
-            if required_quals:
-                req_quals_str = '\n'.join([f"- {q}" for q in required_quals]) if isinstance(required_quals, list) else str(required_quals)
-                req_resp_parts.append(f"Required Qualifications:\n{req_quals_str}")
+                if reqs:
+                    edu_parts.append(f"Requirements: {reqs}")
 
-            if req_resp_parts:
-                add_chunk("requirements_responsibilities", '\n\n'.join(req_resp_parts))
+                if edu_parts:
+                    add_chunk("education", ' | '.join(edu_parts), i)
 
-            # Chunk 2: Experience + Education (dedicated to experience and education only)
-            exp_edu_parts = []
+        # Certifications chunk (matching resume certifications format)
+        certifications = jd_json.get('certifications', [])
+        if certifications:
+            certs_str = ', '.join(certifications) if isinstance(certifications, list) else str(certifications)
+            add_chunk("certifications", f"Required Certifications: {certs_str}")
 
-            # Experience section
-            exp_parts = []
-            if years_required:
-                exp_parts.append(f"Years Required: {years_required}")
-            if experience_level:
-                exp_parts.append(f"Level: {experience_level}")
-            if experience_desc:
-                exp_parts.append(f"Description: {experience_desc}")
+        # Responsibilities chunk
+        responsibilities = jd_json.get('responsibilities', [])
+        if responsibilities:
+            resp_str = '\n'.join([f"- {r}" for r in responsibilities]) if isinstance(responsibilities, list) else str(responsibilities)
+            add_chunk("responsibilities", f"Key Responsibilities:\n{resp_str}")
 
-            if exp_parts:
-                exp_edu_parts.append("Experience Required:\n" + '\n'.join(exp_parts))
+        # Additional info chunk (company, benefits, etc.)
+        additional_parts = []
 
-            # Education section
-            edu_parts = []
-            if education_degree:
-                edu_parts.append(f"Degree: {education_degree}")
-            if education_field:
-                edu_parts.append(f"Field: {education_field}")
-            if education_reqs:
-                edu_parts.append(f"Requirements: {education_reqs}")
+        title = jd_json.get('title', '')
+        if title:
+            additional_parts.append(f"Position: {title}")
 
-            if edu_parts:
-                exp_edu_parts.append("Education Required:\n" + '\n'.join(edu_parts))
+        company = jd_json.get('company', '')
+        if company:
+            additional_parts.append(f"Company: {company}")
 
-            # Preferred qualifications
-            if preferred_quals:
-                pref_quals_str = '\n'.join([f"- {q}" for q in preferred_quals]) if isinstance(preferred_quals, list) else str(preferred_quals)
-                exp_edu_parts.append(f"Preferred Qualifications:\n{pref_quals_str}")
+        location = jd_json.get('location', '')
+        if location:
+            additional_parts.append(f"Location: {location}")
 
-            if exp_edu_parts:
-                add_chunk("experience_education", '\n\n'.join(exp_edu_parts))
+        employment_type = jd_json.get('employment_type', '')
+        if employment_type:
+            additional_parts.append(f"Employment Type: {employment_type}")
 
-            # Chunk 3: Benefits + Location + Salary + Company Info
-            ben_loc_sal_parts = []
+        salary = jd_json.get('salary', '')
+        if salary:
+            additional_parts.append(f"Salary: {salary}")
 
-            benefits = jd_json.get('benefits', [])
-            if benefits:
-                ben_str = '\n'.join([f"- {b}" for b in benefits]) if isinstance(benefits, list) else str(benefits)
-                ben_loc_sal_parts.append(f"Benefits:\n{ben_str}")
+        benefits = jd_json.get('benefits', [])
+        if benefits:
+            ben_str = ', '.join(benefits) if isinstance(benefits, list) else str(benefits)
+            additional_parts.append(f"Benefits: {ben_str}")
 
-            location = jd_json.get('location', '')
-            if location:
-                ben_loc_sal_parts.append(f"Location: {location}")
+        about_company = jd_json.get('about_company', '')
+        if about_company:
+            additional_parts.append(f"About: {about_company}")
 
-            salary = jd_json.get('salary', '')
-            if salary:
-                ben_loc_sal_parts.append(f"Salary: {salary}")
+        if additional_parts:
+            add_chunk("additional_info", ' | '.join(additional_parts))
 
-            employment_type = jd_json.get('employment_type', '')
-            if employment_type:
-                ben_loc_sal_parts.append(f"Employment Type: {employment_type}")
-
-            about_company = jd_json.get('about_company', '')
-            if about_company:
-                ben_loc_sal_parts.append(f"About Company: {about_company}")
-
-            if ben_loc_sal_parts:
-                add_chunk("benefits_location_salary", '\n\n'.join(ben_loc_sal_parts))
-
-            return chunks
+        return chunks
         
     @log_execution_time(logger)
     def preprocess_jd(self, jd_text: str, jd_id: str) -> List[Dict[str, str]]:
