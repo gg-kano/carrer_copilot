@@ -20,15 +20,6 @@
 
 **Career Copilot** is an advanced AI-powered recruitment assistant that revolutionizes how you manage resumes and match candidates to job openings. Built with cutting-edge technologies like Google Gemini AI, ChromaDB vector database, and Streamlit, it provides intelligent resume parsing, semantic search, and automated candidate ranking.
 
-### Why Career Copilot?
-
-- **Save Time**: Automate resume screening and candidate matching - process 100+ resumes in minutes
-- **Improve Quality**: AI-powered analysis ensures better candidate-job fit beyond keyword matching
-- **Scale Easily**: Handle hundreds of resumes with batch processing and vector search
-- **Data-Driven**: Semantic similarity scores find the best matches, not just keyword matches
-- **User-Friendly**: Beautiful web interface - no technical knowledge required
-- **Privacy First**: All data stored locally - your candidate data never leaves your machine
-
 ## Features
 
 ### Core Capabilities
@@ -43,37 +34,25 @@
 
 ---
 
-## Screenshots
+## How It Works
 
-### Resume Extraction & Analysis
+Career Copilot uses a 3-step intelligent pipeline:
 
-Upload a resume and instantly see AI-extracted structured data:
+1. **📥 Extract** → AI parses resumes and job descriptions into structured data
 
 <div align="center">
   <img src="image/extract_message.jpg" alt="Resume Extraction Demo" width="800"/>
   <p><i>AI automatically extracts skills, experience, education, and projects from resumes</i></p>
 </div>
 
-### Intelligent Candidate Matching
+2. **🔍 Store** → Vector embeddings stored in ChromaDB for semantic search
 
-Match job descriptions with candidates and get detailed scoring:
+3. **🎯 Match** → Smart matching algorithm ranks candidates by fit, not just keywords
 
 <div align="center">
   <img src="image/match_resume.jpg" alt="Candidate Matching Demo" width="800"/>
   <p><i>AI-powered matching with detailed scores and explanations for each candidate</i></p>
 </div>
-
----
-
-## How It Works
-
-Career Copilot uses a 3-step intelligent pipeline:
-
-1. **📥 Extract** → AI parses resumes and job descriptions into structured data
-2. **🔍 Store** → Vector embeddings stored in ChromaDB for semantic search
-3. **🎯 Match** → Smart matching algorithm ranks candidates by fit, not just keywords
-
-See it in action in the [screenshots above](#screenshots)!
 
 ---
 
@@ -108,8 +87,6 @@ streamlit run app.py
 ```
 
 Visit `http://localhost:8501` in your browser and start matching candidates!
-
-> **💡 Troubleshooting**: Having API issues? Check the [API Troubleshooting Guide](TROUBLESHOOTING_API.md)
 
 ---
 
@@ -200,62 +177,3 @@ The application uses ChromaDB for vector storage. Data is persisted in the `chro
 Logs are stored in the `logs/` directory:
 - `career_copilot_YYYYMMDD.log`: Application logs
 - `errors_YYYYMMDD.log`: Error logs
-
----
-
-## Documentation
-
-- **[API Troubleshooting Guide](TROUBLESHOOTING_API.md)** - Fix common API quota issues
-- **[Matching Improvements](MATCHING_IMPROVEMENTS.md)** - Details on matching enhancements
-- **[JD Format Migration](JD_FORMAT_MIGRATION_GUIDE.md)** - Understanding the JD extraction format
-
----
-
-## Performance
-
-- **Resume Processing**: ~3-5 seconds per resume (with Gemini AI)
-- **Batch Upload**: Process 100 resumes in ~5-8 minutes
-- **Search Speed**: Instant results from thousands of resumes using vector search
-- **Accuracy**: AI-powered semantic matching (not just keyword matching)
-- **Daily Capacity**: 1500+ resumes/JDs with free tier API
-
----
-
-## Use Cases
-
-Career Copilot is perfect for:
-
-- **Recruiters & HR Teams**: Screen hundreds of resumes in minutes, not hours
-- **Hiring Managers**: Find the best candidates based on actual requirements, not just keywords
-- **Staffing Agencies**: Manage large candidate databases and match them to client needs
-- **Job Seekers**: Analyze your resume against job descriptions to improve your chances
-- **Small Businesses**: Professional recruitment tools without enterprise costs
-
----
-
-## License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgments
-
-Built with amazing open-source technologies:
-
-- **[Google Gemini](https://ai.google.dev/)** - Advanced AI for resume parsing
-- **[ChromaDB](https://www.trychroma.com/)** - High-performance vector database
-- **[Streamlit](https://streamlit.io/)** - Beautiful Python web framework
-- **[Sentence Transformers](https://www.sbert.net/)** - State-of-the-art embeddings
-
----
-
-<div align="center">
-
-**Made with ❤️ for recruiters and hiring managers**
-
-If you find this helpful, please ⭐ star the repo!
-
-[Report Bug](https://github.com/gg-kano/carrer_copilot/issues) • [Request Feature](https://github.com/gg-kano/carrer_copilot/issues)
-
-</div>

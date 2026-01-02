@@ -19,9 +19,9 @@ class Config:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
     # ==================== LLM Models ====================
-    RESUME_LLM_MODEL = "gemini-2.0-flash-lite"
-    JD_LLM_MODEL = "gemini-2.0-flash-lite"
-    MATCHING_LLM_MODEL = "gemini-2.0-flash-lite"
+    RESUME_LLM_MODEL = "gemini-2.5-flash"
+    JD_LLM_MODEL = "gemini-2.5-flash"
+    MATCHING_LLM_MODEL = "gemini-2.5-flash"
 
     # ==================== File Processing ====================
     PDF_UPLOAD_TIMEOUT_SECONDS = 60
